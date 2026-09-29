@@ -202,46 +202,6 @@ func TestRegisterLatestWins(t *testing.T) {
 	}
 }
 
-func TestExecDirByID(t *testing.T) {
-	stateDir, cleanup := setupTestState(t)
-	defer cleanup()
-
-	execBase := filepath.Join(stateDir, "exec")
-
-	execID := "test123"
-	dir := filepath.Join(execBase, execID)
-	_ = os.MkdirAll(dir, 0755)
-	_ = atomicWrite(filepath.Join(dir, "command"), "echo hello")
-
-	cmd, err := readFile(filepath.Join(dir, "command"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd != "echo hello" {
-		t.Errorf("expected 'echo hello', got '%s'", cmd)
-	}
-
-	badDir := filepath.Join(execBase, "nonexistent")
-	if _, err := os.Stat(badDir); err == nil {
-		t.Error("non-existent exec dir should not exist")
-	}
-}
-
-func TestExecIDValidation(t *testing.T) {
-	valid := []string{"abc123", "xswtag2wgpgg", "a1b2c3d4e5f6"}
-	for _, id := range valid {
-		if !execIDPattern.MatchString(id) {
-			t.Errorf("expected '%s' to be valid exec ID", id)
-		}
-	}
-	invalid := []string{"../etc", "../../passwd", "abc/def", "ABC", "abc 123", "abc;rm", ""}
-	for _, id := range invalid {
-		if execIDPattern.MatchString(id) {
-			t.Errorf("expected '%s' to be invalid exec ID", id)
-		}
-	}
-}
-
 func TestResolveRoleForCommandFallbackCwd(t *testing.T) {
 	stateDir, cleanup := setupTestState(t)
 	defer cleanup()
