@@ -9,7 +9,20 @@ AI エージェント同士（Claude、Codex など）が pane ID を意識せ�
 | マルチプレクサ | 状態 |
 |---|---|
 | Zellij 0.45+ | サポート済み（`list-panes --json`、`new-pane --tab-id` を使用） |
-| tmux | 計画中（全 API に同等コマンドあり、未実装） |
+| tmux 3.2+ | サポート済み（`switch-client`、`capture-pane -p` を使用） |
+
+### マルチプレクサの選択
+
+検出は以下の優先順で行われます:
+
+| 優先度 | 方法 | 例 |
+|---|---|---|
+| 1 | `--mux` フラグ | `panecom --mux tmux register developer` |
+| 2 | `PANECOM_MUX` 環境変数 | `PANECOM_MUX=tmux panecom register developer` |
+| 3 | 自動検出: `ZELLIJ_SESSION_NAME` | Zellij セッション内で自動選択 |
+| 4 | 自動検出: `TMUX` | tmux セッション内で自動選択 |
+
+両方の環境変数がある場合、自動検出では Zellij が優先されます。明示的に `--mux` または `PANECOM_MUX` で指定してください。
 
 ## インストール
 
@@ -38,15 +51,17 @@ go install github.com/konono/panecom@latest
 ### 前提条件
 
 - Go 1.27+（ビルド時のみ）
-- Zellij 0.45+（`list-panes --json`、`--tab-id` オプションが必要）
+- Zellij 0.45+ または tmux 3.2+
 - Linux (amd64/arm64) または macOS (amd64/arm64)
 
 ### 最小手順
 
-1. Zellij セッションを起動します:
+1. マルチプレクサのセッションを起動します:
 
 ```bash
-zellij
+zellij    # Zellij の場合
+# または
+tmux      # tmux の場合
 ```
 
 2. Pane A で developer として登録:
@@ -62,13 +77,13 @@ panecom register reviewer
 codex  # または claude 等
 ```
 
-> 両方の pane は **同じ Zellij セッション内**、**同じディレクトリ** から register してください。これが同じ namespace に所属する条件です。
+> 両方の pane は **同じセッション内**、**同じディレクトリ** から register してください。これが同じ namespace に所属する条件です。
 
 4. 通信する:
 
 ```bash
 # Pane A から
-panecom resolve reviewer                    # → terminal_N
+panecom resolve reviewer                    # → terminal_N (Zellij) / %N (tmux)
 panecom send reviewer "コードをレビューしてください"  # Pane B のエージェントに送られる
 panecom dump reviewer                       # Pane B の現在画面を取得
 ```
@@ -79,8 +94,9 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 
 | エラー | 原因 | 対処 |
 |---|---|---|
-| `ZELLIJ_SESSION_NAME not set` | Zellij 外で実行 | Zellij セッション内で実行する |
-| `ZELLIJ_PANE_ID not set` | Zellij が起動した pane 外で実行 | Zellij の terminal pane 内で実行する。pane を閉じて開き直す |
+| `not running inside a supported multiplexer` | Zellij/tmux 外で実行 | マルチプレクサのセッション内で実行する |
+| `unsupported multiplexer: X` | 未対応の `--mux` 値 | `zellij` または `tmux` を指定 |
+| `ZELLIJ_PANE_ID not set` / `TMUX_PANE not set` | pane ID が取得できない | マルチプレクサの terminal pane 内で実行する |
 | `role 'X' is not registered` | 相手が未登録 or 別 namespace | 同じディレクトリから register する |
 | `role 'X' points to stale pane` | 相手の pane が閉じられた | 相手側で再度 `panecom register X` |
 
@@ -88,6 +104,7 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 
 | コマンド | 説明 |
 |---|---|
+| `[--mux zellij\|tmux]` | マルチプレクサを明示指定（省略時は自動検出） |
 | `register <role>` | 現在の pane を role として登録 |
 | `whoami` | 現在の pane の role を表示 |
 | `resolve <role>` | role → pane ID を解決 |
@@ -180,8 +197,7 @@ developer ─────→ pane_2
 reviewer  ─────→ pane_5
                     │
                     ▼
-              Zellij (現在)
-              tmux  (計画中)
+              Zellij / tmux
 ```
 
 マルチプレクサの pane ID を安定した role 名へ抽象化する薄い wrapper です。

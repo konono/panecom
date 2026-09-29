@@ -1,11 +1,11 @@
 ---
 name: panecom
-description: Zellij 上の他 agent との通信には panecom を使う。ユーザーから明示的に指示された場合のみ利用する
+description: ターミナルマルチプレクサ（Zellij / tmux）上の他 agent との通信には panecom を使う。ユーザーから明示的に指示された場合のみ利用する
 ---
 
 # panecom
 
-Zellij pane 間の通信ツール。role 名で相手を指定する。pane ID を直接扱わない。
+ターミナルマルチプレクサ（Zellij / tmux）の pane 間通信ツール。role 名で相手を指定する。pane ID を直接扱わない。
 
 ## 重要: 利用条件
 
@@ -17,6 +17,17 @@ Zellij pane 間の通信ツール。role 名で相手を指定する。pane ID �
 - 「reviewer に送って」「developer に共有して」
 
 **通常のコマンド実行は自分の環境（Bash ツール等）で行う。** panecom 経由だとサンドボックスや権限管理の外で動作する。
+
+## マルチプレクサの選択
+
+panecom は Zellij と tmux を自動検出する。明示指定も可能:
+
+```
+panecom --mux tmux <command>       # --mux フラグ
+PANECOM_MUX=tmux panecom <command> # 環境変数
+```
+
+優先順位: `--mux` > `PANECOM_MUX` > 自動検出（`ZELLIJ_SESSION_NAME` > `TMUX`）
 
 ## コマンドの使い分け
 
@@ -93,6 +104,6 @@ panecom profile [-f] <name>     # config.yaml のプロファイルで環境構�
 - **ユーザーの明示的な指示なく panecom を使わない**
 - **通常のコマンド実行は自分の環境で行う（Bash ツール等）**
 - pane ID を推測しない
-- `zellij action list-panes` から通信相手を推測しない
+- マルチプレクサの list-panes コマンドから通信相手を推測しない
 - exec の結果は stdout で返るので、別途 dump する必要はない
 - send は AI エージェントへ、exec はシェル pane へ使う

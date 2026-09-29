@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +15,8 @@ import (
 )
 
 var rolePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+var mux Multiplexer
 
 func die(msg string) {
 	fmt.Fprintf(os.Stderr, "panecom: %s\n", msg)
@@ -47,32 +48,14 @@ func stateRoot() string {
 	return filepath.Join(cwd, ".panecom")
 }
 
-func sessionRoot(sessionName string) string {
-	return filepath.Join(stateRoot(), "sessions", hashString(sessionName))
-}
-
-func zellijSessionName() string {
-	s := os.Getenv("ZELLIJ_SESSION_NAME")
-	if s == "" {
-		die("not running inside Zellij (ZELLIJ_SESSION_NAME not set)")
+func sessionRoot(muxKind, sessionName string) string {
+	var key string
+	if muxKind == "zellij" {
+		key = sessionName
+	} else {
+		key = muxKind + ":" + sessionName
 	}
-	return s
-}
-
-func currentPaneID() string {
-	id := os.Getenv("ZELLIJ_PANE_ID")
-	if id == "" {
-		return ""
-	}
-	return "terminal_" + id
-}
-
-func requireCurrentPaneID() string {
-	id := currentPaneID()
-	if id == "" {
-		die("ZELLIJ_PANE_ID not set")
-	}
-	return id
+	return filepath.Join(stateRoot(), "sessions", hashString(key))
 }
 
 func canonicalCwd() string {
@@ -112,49 +95,6 @@ func readFile(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-type zellijPane struct {
-	ID       int    `json:"id"`
-	IsPlugin bool   `json:"is_plugin"`
-	TabID    int    `json:"tab_id"`
-	TabName  string `json:"tab_name"`
-}
-
-func listTerminalPanes() ([]zellijPane, error) {
-	out, err := exec.Command("zellij", "action", "list-panes", "--json", "-t").Output()
-	if err != nil {
-		return nil, err
-	}
-	var all []zellijPane
-	if err := json.Unmarshal(out, &all); err != nil {
-		return nil, err
-	}
-	var terminals []zellijPane
-	for _, p := range all {
-		if !p.IsPlugin {
-			terminals = append(terminals, p)
-		}
-	}
-	return terminals, nil
-}
-
-func paneExists(paneID string) (bool, error) {
-	numStr := strings.TrimPrefix(paneID, "terminal_")
-	num, err := strconv.Atoi(numStr)
-	if err != nil {
-		return false, fmt.Errorf("invalid pane ID: %s", paneID)
-	}
-	panes, err := listTerminalPanes()
-	if err != nil {
-		return false, fmt.Errorf("failed to list panes: %w", err)
-	}
-	for _, p := range panes {
-		if p.ID == num {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func namespaceDir(sRoot, cwd string) string {
 	return filepath.Join(sRoot, "namespaces", hashString(cwd))
 }
@@ -177,12 +117,43 @@ func resolveRole(nsDir, role string) (string, error) {
 	return paneID, nil
 }
 
+func requireSession() (string, string) {
+	session, err := mux.SessionName()
+	if err != nil {
+		die(err.Error())
+	}
+	return session, sessionRoot(mux.Kind(), session)
+}
+
+func requirePaneID() string {
+	id, err := mux.CurrentPaneID()
+	if err != nil {
+		die(err.Error())
+	}
+	return id
+}
+
+func currentPaneIDOrEmpty() string {
+	id, err := mux.CurrentPaneID()
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
+func sendToPane(paneID, message string) error {
+	if err := mux.SendKeys(paneID, message); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
+	return mux.SendEnter(paneID)
+}
+
 func cmdRegister(role string) {
 	validateRole(role)
-	session := zellijSessionName()
-	paneID := requireCurrentPaneID()
+	session, sRoot := requireSession()
+	paneID := requirePaneID()
 	cwd := canonicalCwd()
-	sRoot := sessionRoot(session)
 	cwdHash := hashString(cwd)
 	nsDir := namespaceDir(sRoot, cwd)
 
@@ -217,47 +188,35 @@ func cmdRegister(role string) {
 		die("failed to write pane mapping: " + err.Error())
 	}
 
-	_ = exec.Command("zellij", "action", "rename-pane", "--pane-id", paneID, fmt.Sprintf("panecom:%s", role)).Run()
+	_ = mux.RenamePane(paneID, fmt.Sprintf("panecom:%s", role))
 
 	fmt.Println(role)
 }
 
 func cmdOpen(role string, direction string, binPath string) {
 	validateRole(role)
-	myPaneID := requireCurrentPaneID()
-
+	myPaneID := requirePaneID()
 	cwd := canonicalCwd()
 
-	newPaneArgs := []string{"action", "new-pane", "--near-current-pane", "--cwd", cwd}
-	if direction != "" {
-		newPaneArgs = append(newPaneArgs, "--direction", direction)
-	}
-	out, err := exec.Command("zellij", newPaneArgs...).Output()
+	newPaneID, err := mux.NewPane(myPaneID, cwd, direction)
 	if err != nil {
-		die("failed to create new pane: " + err.Error())
-	}
-	newPaneID := strings.TrimSpace(string(out))
-	if newPaneID == "" {
-		die("failed to get new pane ID")
+		die(err.Error())
 	}
 
-	numID := strings.TrimPrefix(newPaneID, "terminal_")
-
-	registerCmd := fmt.Sprintf("ZELLIJ_PANE_ID=%s panecom register %s", numID, role)
+	registerCmd := fmt.Sprintf("PANECOM_MUX=%s panecom register %s", mux.Kind(), role)
 	if err := sendToPane(newPaneID, registerCmd); err != nil {
 		die(fmt.Sprintf("failed to register in new pane: %s", err.Error()))
 	}
 
 	time.Sleep(300 * time.Millisecond)
-	_ = exec.Command("zellij", "action", "focus-pane-id", myPaneID).Run()
+	_ = mux.FocusPane(myPaneID)
 
 	fmt.Println(newPaneID)
 }
 
 func cmdWhoami() {
-	session := zellijSessionName()
-	paneID := requireCurrentPaneID()
-	sRoot := sessionRoot(session)
+	_, sRoot := requireSession()
+	paneID := requirePaneID()
 
 	nsDir, err := namespaceForCurrentPane(sRoot, paneID)
 	if err != nil {
@@ -281,9 +240,8 @@ func cmdWhoami() {
 
 func resolveRoleForCommand(role string) string {
 	validateRole(role)
-	session := zellijSessionName()
-	paneID := currentPaneID()
-	sRoot := sessionRoot(session)
+	session, sRoot := requireSession()
+	paneID := currentPaneIDOrEmpty()
 
 	var nsDir string
 	if paneID != "" {
@@ -303,7 +261,7 @@ func resolveRoleForCommand(role string) string {
 		die(fmt.Sprintf("role '%s' is not registered in this namespace", role))
 	}
 
-	exists, err := paneExists(targetPaneID)
+	exists, err := mux.PaneExists(session, targetPaneID)
 	if err != nil {
 		die(fmt.Sprintf("failed to check pane '%s': %s", targetPaneID, err.Error()))
 	}
@@ -324,7 +282,7 @@ func cmdResolve(role string) {
 
 func cmdDump(role string, full bool, lines int) {
 	paneID := resolveRoleForCommand(role)
-	screen, err := dumpPane(paneID, full)
+	screen, err := mux.DumpPane(paneID, full)
 	if err != nil {
 		die(fmt.Sprintf("failed to dump screen for '%s': %s", role, err.Error()))
 	}
@@ -350,34 +308,11 @@ func cmdSend(role, message string) {
 	}
 }
 
-func dumpPane(paneID string, full bool) (string, error) {
-	args := []string{"action", "dump-screen", "--pane-id", paneID}
-	if full {
-		args = append(args, "--full")
-	}
-	out, err := exec.Command("zellij", args...).Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
-}
-
-func sendToPane(paneID, message string) error {
-	cmd := exec.Command("zellij", "action", "write-chars", "--pane-id", paneID, message)
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	time.Sleep(100 * time.Millisecond)
-	cmd = exec.Command("zellij", "action", "write", "--pane-id", paneID, "13")
-	return cmd.Run()
-}
-
 func cmdShare(toRole string, full bool, lines int) {
-	fromPaneID := requireCurrentPaneID()
+	fromPaneID := requirePaneID()
 	toPaneID := resolveRoleForCommand(toRole)
 
-	session := zellijSessionName()
-	sRoot := sessionRoot(session)
+	_, sRoot := requireSession()
 	fromRole := "unknown"
 	if nsDir, err := namespaceForCurrentPane(sRoot, fromPaneID); err == nil {
 		entries, _ := os.ReadDir(filepath.Join(nsDir, "roles"))
@@ -390,7 +325,7 @@ func cmdShare(toRole string, full bool, lines int) {
 		}
 	}
 
-	screen, err := dumpPane(fromPaneID, full)
+	screen, err := mux.DumpPane(fromPaneID, full)
 	if err != nil {
 		die(fmt.Sprintf("failed to dump own screen: %s", err.Error()))
 	}
@@ -414,9 +349,7 @@ func acquireExecLock(token string) {
 		die("failed to create state dir: " + err.Error())
 	}
 
-	// Mkdir is atomic — only one process succeeds
 	if err := os.Mkdir(lockDir, 0755); err == nil {
-		// We own the lock — write token
 		if wErr := os.WriteFile(filepath.Join(lockDir, "token"), []byte(token), 0644); wErr != nil {
 			_ = os.RemoveAll(lockDir)
 			die("failed to write lock token: " + wErr.Error())
@@ -424,7 +357,6 @@ func acquireExecLock(token string) {
 		return
 	}
 
-	// Lock exists — check for stale (runner completed)
 	oldToken, readErr := readFile(filepath.Join(lockDir, "token"))
 	if readErr != nil {
 		die("another exec is already running")
@@ -434,15 +366,12 @@ func acquireExecLock(token string) {
 		die("another exec is already running")
 	}
 
-	// Stale: atomically claim by renaming the lock dir
 	recoverDir := lockDir + ".recover." + token
 	if err := os.Rename(lockDir, recoverDir); err != nil {
-		// Another process already claimed it
 		die("another exec is already running")
 	}
 	_ = os.RemoveAll(recoverDir)
 
-	// Create fresh lock
 	if err := os.Mkdir(lockDir, 0755); err != nil {
 		die("another exec is already running")
 	}
@@ -453,7 +382,6 @@ func acquireExecLock(token string) {
 }
 
 func execDieWithCleanup(token, execDir, msg string) {
-	// Write exitcode so stale detection can recover the lock
 	exitcodeFile := filepath.Join(execDir, "exitcode")
 	if _, err := os.Stat(exitcodeFile); err != nil {
 		_ = os.MkdirAll(execDir, 0755)
@@ -480,7 +408,6 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 		execDieWithCleanup(token, execDir, "failed to create exec dir: "+err.Error())
 	}
 
-	// Update "current" symlink for progress monitoring (cat .panecom/exec/current/stdout)
 	currentLink := filepath.Join(execBase, "current")
 	_ = os.Remove(currentLink)
 	if err := os.Symlink(token, currentLink); err != nil {
@@ -495,7 +422,6 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 		execDieWithCleanup(token, execDir, "failed to write command: "+err.Error())
 	}
 
-	// Clean up old completed exec dirs
 	entries, _ := os.ReadDir(execBase)
 	for _, e := range entries {
 		if e.Name() == token || e.Name() == "current" {
@@ -510,7 +436,6 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	escaped := strings.ReplaceAll(command, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, "'", `\'`)
 	quotedCmd := "$'" + escaped + "'"
-	// Leading space suppresses history when HIST_IGNORE_SPACE is set in shell
 	if err := sendToPane(paneID, fmt.Sprintf(" PANECOM_TOKEN=%s panecom exec -- %s", token, quotedCmd)); err != nil {
 		execDieWithCleanup(token, execDir, fmt.Sprintf("failed to send command to '%s': %s", role, err.Error()))
 	}
@@ -524,7 +449,6 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 			break
 		}
 		if time.Now().After(deadline) {
-			// Lock stays — runner will write exitcode, next acquirer does stale recovery
 			die(fmt.Sprintf("timeout waiting for command to complete on '%s' (%.0fs)", role, timeoutSec))
 		}
 		time.Sleep(pollInterval)
@@ -544,9 +468,6 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	if data, err := os.ReadFile(stderrFile); err == nil {
 		_, _ = os.Stderr.Write(data)
 	}
-
-	// Lock is NOT released here. Next acquirer's stale detection handles cleanup.
-	// This avoids TOCTOU between read-token and remove-lock.
 
 	if exitCode != 0 {
 		os.Exit(exitCode)
@@ -569,7 +490,6 @@ func cmdExecRun(token string) {
 	exitcodeFile := filepath.Join(execDir, "exitcode")
 
 	if _, err := os.Stat(execDir); err != nil {
-		// No exec dir — write exitcode to enable stale recovery
 		_ = os.MkdirAll(execDir, 0755)
 		runnerDie(exitcodeFile, 1, fmt.Sprintf("exec dir not found for token: %s", token))
 	}
@@ -716,7 +636,6 @@ func cmdExecRun(token string) {
 	if err := os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "panecom: failed to write exit code: %s\n", err.Error())
 	}
-	// Lock is NOT released here. Stale detection by next acquirer handles cleanup.
 }
 
 func shellQuote(s string) string {
@@ -861,10 +780,10 @@ func cmdProfile(name string, binPath string, focus bool) {
 		die(fmt.Sprintf("profile '%s' has no panes defined", name))
 	}
 
-	_ = binPath // reserved for future use
+	_ = binPath
 
 	cwd := canonicalCwd()
-	myPaneID := currentPaneID()
+	myPaneID := currentPaneIDOrEmpty()
 
 	seen := make(map[string]bool)
 	for _, p := range profile.Panes {
@@ -875,36 +794,9 @@ func cmdProfile(name string, binPath string, focus bool) {
 		seen[p.Role] = true
 	}
 
-	panesBefore, _ := listTerminalPanes()
-	existingIDs := make(map[int]bool)
-	for _, p := range panesBefore {
-		existingIDs[p.ID] = true
-	}
-
-	tabOut, err := exec.Command("zellij", "action", "new-tab", "--name", name, "--cwd", cwd).Output()
+	tabID, firstPaneID, err := mux.NewTab(name, cwd)
 	if err != nil {
-		die("failed to create tab: " + err.Error())
-	}
-	tabIDStr := strings.TrimSpace(string(tabOut))
-	tabID, err := strconv.Atoi(tabIDStr)
-	if err != nil {
-		die(fmt.Sprintf("failed to parse tab ID '%s': %s", tabIDStr, err.Error()))
-	}
-	time.Sleep(500 * time.Millisecond)
-
-	firstPaneID := ""
-	panesAfter, err := listTerminalPanes()
-	if err != nil {
-		die("failed to list panes after tab creation: " + err.Error())
-	}
-	for _, p := range panesAfter {
-		if p.TabID == tabID && !existingIDs[p.ID] {
-			firstPaneID = fmt.Sprintf("terminal_%d", p.ID)
-			break
-		}
-	}
-	if firstPaneID == "" {
-		die("failed to detect initial pane in new tab")
+		die(err.Error())
 	}
 
 	type createdPane struct {
@@ -923,11 +815,11 @@ func cmdProfile(name string, binPath string, focus bool) {
 			if dir == "" {
 				dir = "right"
 			}
-			newOut, err := exec.Command("zellij", "action", "new-pane", "--direction", dir, "--cwd", cwd, "--tab-id", strconv.Itoa(tabID)).Output()
+			newPaneID, err := mux.NewPaneInTab(tabID, cwd, dir)
 			if err != nil {
 				die(fmt.Sprintf("failed to create pane for role '%s': %s", p.Role, err.Error()))
 			}
-			paneID = strings.TrimSpace(string(newOut))
+			paneID = newPaneID
 		}
 
 		if paneID == "" {
@@ -944,8 +836,7 @@ func cmdProfile(name string, binPath string, focus bool) {
 	time.Sleep(1 * time.Second)
 
 	for _, p := range panes {
-		numID := strings.TrimPrefix(p.paneID, "terminal_")
-		registerCmd := fmt.Sprintf("cd %q && ZELLIJ_PANE_ID=%s panecom register %s", cwd, numID, p.cfg.Role)
+		registerCmd := fmt.Sprintf("cd %q && PANECOM_MUX=%s panecom register %s", cwd, mux.Kind(), p.cfg.Role)
 		if err := sendToPane(p.paneID, registerCmd); err != nil {
 			die(fmt.Sprintf("failed to register role '%s': %s", p.cfg.Role, err.Error()))
 		}
@@ -961,11 +852,11 @@ func cmdProfile(name string, binPath string, focus bool) {
 
 	if focus {
 		if foregroundPaneID != "" {
-			_ = exec.Command("zellij", "action", "focus-pane-id", foregroundPaneID).Run()
+			_ = mux.FocusPane(foregroundPaneID)
 		}
 	} else {
 		if myPaneID != "" {
-			_ = exec.Command("zellij", "action", "focus-pane-id", myPaneID).Run()
+			_ = mux.FocusPane(myPaneID)
 		}
 	}
 
@@ -984,15 +875,21 @@ func cmdProfile(name string, binPath string, focus bool) {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  panecom register <role>                Register current pane as <role>
-  panecom whoami                         Show current pane's role
-  panecom resolve <role>                 Show pane ID for <role>
-  panecom open [-d right|down] <role>    Open new pane and register as <role>
-  panecom dump [--full] [-l N] <role>    Dump screen of <role>'s pane
-  panecom send <role> <msg>              Send message to <role>'s pane
-  panecom share [--full] [-l N] <role>    Share this pane's screen with <role>
-  panecom exec [--timeout N] <role> <cmd> Run command on <role>, return output
-  panecom profile [-f] <name>            Launch profile from .panecom/config.yaml
+  panecom [--mux zellij|tmux] <command> [args...]
+
+Commands:
+  register <role>                Register current pane as <role>
+  whoami                         Show current pane's role
+  resolve <role>                 Show pane ID for <role>
+  open [-d right|down] <role>    Open new pane and register as <role>
+  dump [--full] [-l N] <role>    Dump screen of <role>'s pane
+  send <role> <msg>              Send message to <role>'s pane
+  share [--full] [-l N] <role>    Share this pane's screen with <role>
+  exec [--timeout N] <role> <cmd> Run command on <role>, return output
+  profile [-f] <name>            Launch profile from .panecom/config.yaml
+
+Multiplexer selection (in priority order):
+  --mux flag > PANECOM_MUX env > auto-detect (ZELLIJ_SESSION_NAME > TMUX)
 `)
 	os.Exit(1)
 }
@@ -1001,6 +898,30 @@ func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
 		usage()
+	}
+
+	var muxFlag string
+	if args[0] == "--mux" {
+		if len(args) < 3 {
+			usage()
+		}
+		muxFlag = args[1]
+		args = args[2:]
+	}
+
+	switch args[0] {
+	case "exec":
+		rest := args[1:]
+		if len(rest) >= 1 && rest[0] == "--" {
+			cmdExecRun(os.Getenv("PANECOM_TOKEN"))
+			return
+		}
+	}
+
+	var err error
+	mux, err = DetectMultiplexer(muxFlag, nil)
+	if err != nil {
+		die(err.Error())
 	}
 
 	switch args[0] {
@@ -1092,10 +1013,6 @@ func main() {
 		cmdShare(role, full, lines)
 	case "exec":
 		rest := args[1:]
-		if len(rest) >= 1 && rest[0] == "--" {
-			cmdExecRun(os.Getenv("PANECOM_TOKEN"))
-			return
-		}
 		timeoutSec := 30.0
 		positional := []string{}
 		for i := 0; i < len(rest); i++ {
