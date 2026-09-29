@@ -451,7 +451,10 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	}
 
 	quotedBin := shellQuote(targetBin)
-	if err := sendToPane(paneID, fmt.Sprintf("%s exec -- %s", quotedBin, execID)); err != nil {
+	escaped := strings.ReplaceAll(command, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, "'", `\'`)
+	quotedCmd := "$'" + escaped + "'"
+	if err := sendToPane(paneID, fmt.Sprintf("PANECOM_EXEC=%s %s exec -- %s", execID, quotedBin, quotedCmd)); err != nil {
 		die(fmt.Sprintf("failed to send command to '%s': %s", role, err.Error()))
 	}
 
@@ -492,7 +495,11 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	}
 }
 
-func cmdExecRun(execID string) {
+func cmdExecRun() {
+	execID := os.Getenv("PANECOM_EXEC")
+	if execID == "" {
+		die("PANECOM_EXEC not set")
+	}
 	if !execIDPattern.MatchString(execID) {
 		die(fmt.Sprintf("invalid exec ID: %s", execID))
 	}
@@ -1017,8 +1024,8 @@ func main() {
 		cmdShare(role, full)
 	case "exec":
 		rest := args[1:]
-		if len(rest) >= 2 && rest[0] == "--" {
-			cmdExecRun(rest[1])
+		if len(rest) >= 1 && rest[0] == "--" {
+			cmdExecRun()
 			return
 		}
 		timeoutSec := 30.0
