@@ -530,7 +530,15 @@ func cmdExecRun() {
 	defer func() { _ = errFile.Close() }()
 
 	cmd := exec.Command("sh", "-c", command)
-	cmd.Env = append(os.Environ(), "PAGER=cat", "SYSTEMD_PAGER=cat", "GIT_PAGER=cat")
+	cmd.Env = append(os.Environ(),
+		"PAGER=cat",
+		"SYSTEMD_PAGER=cat",
+		"GIT_PAGER=cat",
+		"DEBIAN_FRONTEND=noninteractive",
+		"GIT_TERMINAL_PROMPT=0",
+		"SSH_BATCH_MODE=yes",
+		"PYTHONDONTWRITEBYTECODE=1",
+	)
 	cmd.Stdin = nil
 
 	stdoutPR, stdoutPW, err := os.Pipe()
