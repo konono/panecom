@@ -530,7 +530,8 @@ func cmdExecRun() {
 	defer func() { _ = errFile.Close() }()
 
 	cmd := exec.Command("sh", "-c", command)
-	cmd.Stdin = os.Stdin
+	cmd.Env = append(os.Environ(), "PAGER=cat", "SYSTEMD_PAGER=cat", "GIT_PAGER=cat")
+	cmd.Stdin = nil
 
 	stdoutPR, stdoutPW, err := os.Pipe()
 	if err != nil {
