@@ -517,8 +517,6 @@ func cmdExecRun() {
 	stderrFile := filepath.Join(execDir, "stderr")
 	exitcodeFile := filepath.Join(execDir, "exitcode")
 
-	fmt.Fprintf(os.Stderr, "$ %s\n", command)
-
 	outFile, err := os.Create(stdoutFile)
 	if err != nil {
 		die("failed to create stdout file: " + err.Error())
