@@ -32,7 +32,6 @@ func stateRoot() string {
 	if dir := os.Getenv("PANECOM_STATE_DIR"); dir != "" {
 		return dir
 	}
-	// Walk up from cwd to find existing .panecom/
 	cwd := canonicalCwd()
 	dir := cwd
 	for {
@@ -46,7 +45,6 @@ func stateRoot() string {
 		}
 		dir = parent
 	}
-	// Not found: default to cwd/.panecom
 	return filepath.Join(cwd, ".panecom")
 }
 
@@ -196,23 +194,21 @@ func cmdRegister(role string) {
 		die("failed to write namespace state: " + err.Error())
 	}
 
-	// Clear previous role for this pane if any
 	prevNsDir, err := namespaceForCurrentPane(sRoot, paneID)
 	if err == nil {
 		entries, _ := os.ReadDir(filepath.Join(prevNsDir, "roles"))
 		for _, e := range entries {
 			content, _ := readFile(filepath.Join(prevNsDir, "roles", e.Name()))
 			if content == paneID {
-				os.Remove(filepath.Join(prevNsDir, "roles", e.Name()))
+				_ = os.Remove(filepath.Join(prevNsDir, "roles", e.Name()))
 			}
 		}
 	}
 
-	// Clear previous pane for this role if any
 	oldPaneID, err := resolveRole(nsDir, role)
 	if err == nil && oldPaneID != paneID {
-		os.Remove(filepath.Join(sRoot, "panes", oldPaneID))
-		os.Remove(filepath.Join(sRoot, "panes", oldPaneID+".bin"))
+		_ = os.Remove(filepath.Join(sRoot, "panes", oldPaneID))
+		_ = os.Remove(filepath.Join(sRoot, "panes", oldPaneID+".bin"))
 	}
 
 	if err := atomicWrite(filepath.Join(nsDir, "roles", role), paneID); err != nil {
@@ -233,8 +229,7 @@ func cmdRegister(role string) {
 		die("failed to write binary path: " + err.Error())
 	}
 
-	// Rename pane title for human visibility
-	exec.Command("zellij", "action", "rename-pane", "--pane-id", paneID, fmt.Sprintf("panecom:%s", role)).Run()
+	_ = exec.Command("zellij", "action", "rename-pane", "--pane-id", paneID, fmt.Sprintf("panecom:%s", role)).Run()
 
 	fmt.Println(role)
 }
@@ -243,7 +238,6 @@ func cmdOpen(role string, direction string, binPath string) {
 	validateRole(role)
 	myPaneID := requireCurrentPaneID()
 
-	// Determine which panecom binary to use in the new pane
 	selfPath := binPath
 	if selfPath == "" {
 		var err error
@@ -258,7 +252,6 @@ func cmdOpen(role string, direction string, binPath string) {
 
 	cwd := canonicalCwd()
 
-	// Create new pane in the same tab, near current pane
 	newPaneArgs := []string{"action", "new-pane", "--near-current-pane", "--cwd", cwd}
 	if direction != "" {
 		newPaneArgs = append(newPaneArgs, "--direction", direction)
@@ -272,18 +265,15 @@ func cmdOpen(role string, direction string, binPath string) {
 		die("failed to get new pane ID")
 	}
 
-	// Extract numeric ID for ZELLIJ_PANE_ID
 	numID := strings.TrimPrefix(newPaneID, "terminal_")
 
-	// Register the new pane via sending a command to it
 	registerCmd := fmt.Sprintf("ZELLIJ_PANE_ID=%s %q register %s", numID, selfPath, role)
 	if err := sendToPane(newPaneID, registerCmd); err != nil {
 		die(fmt.Sprintf("failed to register in new pane: %s", err.Error()))
 	}
 
-	// Restore focus to original pane
 	time.Sleep(300 * time.Millisecond)
-	exec.Command("zellij", "action", "focus-pane-id", myPaneID).Run()
+	_ = exec.Command("zellij", "action", "focus-pane-id", myPaneID).Run()
 
 	fmt.Println(newPaneID)
 }
@@ -342,9 +332,9 @@ func resolveRoleForCommand(role string) string {
 		die(fmt.Sprintf("failed to check pane '%s': %s", targetPaneID, err.Error()))
 	}
 	if !exists {
-		os.Remove(filepath.Join(nsDir, "roles", role))
-		os.Remove(filepath.Join(sRoot, "panes", targetPaneID))
-		os.Remove(filepath.Join(sRoot, "panes", targetPaneID+".bin"))
+		_ = os.Remove(filepath.Join(nsDir, "roles", role))
+		_ = os.Remove(filepath.Join(sRoot, "panes", targetPaneID))
+		_ = os.Remove(filepath.Join(sRoot, "panes", targetPaneID+".bin"))
 		die(fmt.Sprintf("role '%s' points to stale pane '%s'", role, targetPaneID))
 	}
 
@@ -389,7 +379,6 @@ func sendToPane(paneID, message string) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	// Brief pause to let TUI apps process the input before sending Enter
 	time.Sleep(50 * time.Millisecond)
 	cmd = exec.Command("zellij", "action", "write", "--pane-id", paneID, "13")
 	return cmd.Run()
@@ -399,7 +388,6 @@ func cmdShare(toRole string, full bool) {
 	fromPaneID := requireCurrentPaneID()
 	toPaneID := resolveRoleForCommand(toRole)
 
-	// Resolve own role name for the tag
 	session := zellijSessionName()
 	sRoot := sessionRoot(session)
 	fromRole := "unknown"
@@ -445,7 +433,7 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	completed := false
 	defer func() {
 		if completed {
-			os.RemoveAll(execDir)
+			_ = os.RemoveAll(execDir)
 		}
 	}()
 
@@ -453,18 +441,15 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	stderrFile := filepath.Join(execDir, "stderr")
 	exitcodeFile := filepath.Join(execDir, "exitcode")
 
-	// Write command to exec dir for the runner to read
 	if err := atomicWrite(filepath.Join(execDir, "command"), command); err != nil {
 		die("failed to write command: " + err.Error())
 	}
 
-	// Resolve target's panecom binary
 	targetBin := targetBinaryPath(sRoot, paneID)
 	if targetBin == "" {
 		die(fmt.Sprintf("panecom binary path not found for '%s' — re-register the role", role))
 	}
 
-	// Send: <panecom-quoted> exec -- <execID>
 	quotedBin := shellQuote(targetBin)
 	if err := sendToPane(paneID, fmt.Sprintf("%s exec -- %s", quotedBin, execID)); err != nil {
 		die(fmt.Sprintf("failed to send command to '%s': %s", role, err.Error()))
@@ -493,14 +478,14 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	exitCode, _ := strconv.Atoi(exitCodeStr)
 
 	if data, err := os.ReadFile(stdoutFile); err == nil {
-		os.Stdout.Write(data)
+		_, _ = os.Stdout.Write(data)
 	}
 	if data, err := os.ReadFile(stderrFile); err == nil {
-		os.Stderr.Write(data)
+		_, _ = os.Stderr.Write(data)
 	}
 
 	completed = true
-	os.RemoveAll(execDir)
+	_ = os.RemoveAll(execDir)
 
 	if exitCode != 0 {
 		os.Exit(exitCode)
@@ -525,20 +510,19 @@ func cmdExecRun(execID string) {
 	stderrFile := filepath.Join(execDir, "stderr")
 	exitcodeFile := filepath.Join(execDir, "exitcode")
 
-	// Print command for human readability
 	fmt.Fprintf(os.Stderr, "$ %s\n", command)
 
 	outFile, err := os.Create(stdoutFile)
 	if err != nil {
 		die("failed to create stdout file: " + err.Error())
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
 	errFile, err := os.Create(stderrFile)
 	if err != nil {
 		die("failed to create stderr file: " + err.Error())
 	}
-	defer errFile.Close()
+	defer func() { _ = errFile.Close() }()
 
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Stdin = os.Stdin
@@ -556,51 +540,49 @@ func cmdExecRun(execID string) {
 	cmd.Stderr = stderrPW
 
 	if err := cmd.Start(); err != nil {
-		stdoutPW.Close()
-		stderrPW.Close()
-		stdoutPR.Close()
-		stderrPR.Close()
+		_ = stdoutPW.Close()
+		_ = stderrPW.Close()
+		_ = stdoutPR.Close()
+		_ = stderrPR.Close()
 		fmt.Fprintf(os.Stderr, "panecom: failed to start command: %s\n", err.Error())
-		os.WriteFile(exitcodeFile, []byte("127"), 0644)
+		_ = os.WriteFile(exitcodeFile, []byte("127"), 0644)
 		return
 	}
 
-	stdoutPW.Close()
-	stderrPW.Close()
+	_ = stdoutPW.Close()
+	_ = stderrPW.Close()
 
 	done := make(chan struct{}, 2)
 
-	// Tee stdout
 	go func() {
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := stdoutPR.Read(buf)
 			if n > 0 {
-				os.Stdout.Write(buf[:n])
-				outFile.Write(buf[:n])
+				_, _ = os.Stdout.Write(buf[:n])
+				_, _ = outFile.Write(buf[:n])
 			}
 			if readErr != nil {
 				break
 			}
 		}
-		stdoutPR.Close()
+		_ = stdoutPR.Close()
 		done <- struct{}{}
 	}()
 
-	// Tee stderr
 	go func() {
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := stderrPR.Read(buf)
 			if n > 0 {
-				os.Stderr.Write(buf[:n])
-				errFile.Write(buf[:n])
+				_, _ = os.Stderr.Write(buf[:n])
+				_, _ = errFile.Write(buf[:n])
 			}
 			if readErr != nil {
 				break
 			}
 		}
-		stderrPR.Close()
+		_ = stderrPR.Close()
 		done <- struct{}{}
 	}()
 
@@ -616,26 +598,21 @@ func cmdExecRun(execID string) {
 		}
 	}
 
-	outFile.Close()
-	errFile.Close()
-	os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644)
+	_ = outFile.Close()
+	_ = errFile.Close()
+	_ = os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644)
 }
 
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	safe := true
 	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/' || c == '.' || c == '_' || c == '-') {
-			safe = false
-			break
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '/' && c != '.' && c != '_' && c != '-' {
+			return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 		}
 	}
-	if safe {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+	return s
 }
 
 func randomID(n int) string {
@@ -645,7 +622,7 @@ func randomID(n int) string {
 	if err != nil {
 		die("cannot open /dev/urandom")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Read(b); err != nil {
 		die("cannot read /dev/urandom: " + err.Error())
 	}
@@ -691,7 +668,6 @@ func findConfigFile(dir string) string {
 }
 
 func findProjectConfig() string {
-	// Walk up from cwd to find .panecom/config.yaml
 	cwd := canonicalCwd()
 	dir := cwd
 	for {
@@ -720,7 +696,6 @@ func parseConfig(data []byte) (*config, error) {
 }
 
 func loadConfig() (*config, error) {
-	// Load global config
 	var globalCfg *config
 	if path := findConfigFile(globalConfigDir()); path != "" {
 		data, err := os.ReadFile(path)
@@ -733,7 +708,6 @@ func loadConfig() (*config, error) {
 		}
 	}
 
-	// Load project config
 	var projectCfg *config
 	if path := findProjectConfig(); path != "" {
 		data, err := os.ReadFile(path)
@@ -746,7 +720,6 @@ func loadConfig() (*config, error) {
 		}
 	}
 
-	// Merge: global as base, project overrides
 	merged := &config{Profiles: make(map[string]profileConfig)}
 	if globalCfg != nil {
 		for k, v := range globalCfg.Profiles {
@@ -791,7 +764,6 @@ func cmdProfile(name string, binPath string, focus bool) {
 
 	selfPath := binPath
 	if selfPath == "" {
-		var err error
 		selfPath, err = os.Executable()
 		if err != nil {
 			die("cannot determine panecom binary path: " + err.Error())
@@ -807,7 +779,6 @@ func cmdProfile(name string, binPath string, focus bool) {
 	cwd := canonicalCwd()
 	myPaneID := currentPaneID()
 
-	// Validate roles upfront and check for duplicates
 	seen := make(map[string]bool)
 	for _, p := range profile.Panes {
 		validateRole(p.Role)
@@ -817,14 +788,12 @@ func cmdProfile(name string, binPath string, focus bool) {
 		seen[p.Role] = true
 	}
 
-	// Snapshot pane IDs before creating the tab
 	panesBefore, _ := listTerminalPanes()
 	existingIDs := make(map[int]bool)
 	for _, p := range panesBefore {
 		existingIDs[p.ID] = true
 	}
 
-	// Create a new tab named after the profile
 	tabOut, err := exec.Command("zellij", "action", "new-tab", "--name", name, "--cwd", cwd).Output()
 	if err != nil {
 		die("failed to create tab: " + err.Error())
@@ -836,7 +805,6 @@ func cmdProfile(name string, binPath string, focus bool) {
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	// Find the initial pane created by new-tab using tab ID
 	firstPaneID := ""
 	panesAfter, err := listTerminalPanes()
 	if err != nil {
@@ -886,10 +854,8 @@ func cmdProfile(name string, binPath string, focus bool) {
 		}
 	}
 
-	// Wait for shells to be ready
 	time.Sleep(1 * time.Second)
 
-	// Register all panes and run commands
 	for _, p := range panes {
 		numID := strings.TrimPrefix(p.paneID, "terminal_")
 		registerCmd := fmt.Sprintf("cd %q && ZELLIJ_PANE_ID=%s %q register %s", cwd, numID, selfPath, p.cfg.Role)
@@ -907,18 +873,15 @@ func cmdProfile(name string, binPath string, focus bool) {
 	}
 
 	if focus {
-		// Focus the foreground pane in the new tab
 		if foregroundPaneID != "" {
-			exec.Command("zellij", "action", "focus-pane-id", foregroundPaneID).Run()
+			_ = exec.Command("zellij", "action", "focus-pane-id", foregroundPaneID).Run()
 		}
 	} else {
-		// Return to original tab
 		if myPaneID != "" {
-			exec.Command("zellij", "action", "focus-pane-id", myPaneID).Run()
+			_ = exec.Command("zellij", "action", "focus-pane-id", myPaneID).Run()
 		}
 	}
 
-	// Print summary
 	for _, p := range panes {
 		marker := " "
 		if p.cfg.Foreground {
@@ -1025,12 +988,10 @@ func main() {
 		cmdShare(role, full)
 	case "exec":
 		rest := args[1:]
-		// Local run mode: panecom exec -- <execID> [<command for display>]
 		if len(rest) >= 2 && rest[0] == "--" {
 			cmdExecRun(rest[1])
 			return
 		}
-		// Remote mode: panecom exec [--timeout N] <role> <command>
 		timeoutSec := 30.0
 		positional := []string{}
 		for i := 0; i < len(rest); i++ {

@@ -93,12 +93,12 @@ func TestStateRootWalkUp(t *testing.T) {
 	t.Setenv("PANECOM_STATE_DIR", "")
 	dir := t.TempDir()
 	panecomDir := filepath.Join(dir, ".panecom")
-	os.MkdirAll(panecomDir, 0755)
+	_ = os.MkdirAll(panecomDir, 0755)
 	subdir := filepath.Join(dir, "sub", "deep")
-	os.MkdirAll(subdir, 0755)
+	_ = os.MkdirAll(subdir, 0755)
 	origDir, _ := os.Getwd()
-	os.Chdir(subdir)
-	defer os.Chdir(origDir)
+	_ = os.Chdir(subdir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	root := stateRoot()
 	expectedResolved, _ := filepath.EvalSymlinks(panecomDir)
@@ -111,8 +111,8 @@ func TestStateRootWalkUp(t *testing.T) {
 func TestResolveRoleRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	rolesDir := filepath.Join(dir, "roles")
-	os.MkdirAll(rolesDir, 0755)
-	atomicWrite(filepath.Join(rolesDir, "reviewer"), "terminal_5")
+	_ = os.MkdirAll(rolesDir, 0755)
+	_ = atomicWrite(filepath.Join(rolesDir, "reviewer"), "terminal_5")
 
 	paneID, err := resolveRole(dir, "reviewer")
 	if err != nil {
@@ -140,29 +140,24 @@ func TestRegisterRoleSwap(t *testing.T) {
 	cwdHash := hashString(cwd)
 	nsDir := filepath.Join(sRoot, "namespaces", cwdHash)
 
-	// Register pane A as implementer
-	atomicWrite(filepath.Join(nsDir, "roles", "implementer"), "terminal_2")
-	atomicWrite(filepath.Join(sRoot, "panes", "terminal_2"), cwdHash)
+	_ = atomicWrite(filepath.Join(nsDir, "roles", "implementer"), "terminal_2")
+	_ = atomicWrite(filepath.Join(sRoot, "panes", "terminal_2"), cwdHash)
 
-	// Register pane A as reviewer (should clear implementer)
-	// Simulate: same pane, new role
 	entries, _ := os.ReadDir(filepath.Join(nsDir, "roles"))
 	for _, e := range entries {
 		content, _ := readFile(filepath.Join(nsDir, "roles", e.Name()))
 		if content == "terminal_2" {
-			os.Remove(filepath.Join(nsDir, "roles", e.Name()))
+			_ = os.Remove(filepath.Join(nsDir, "roles", e.Name()))
 		}
 	}
-	atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_2")
-	atomicWrite(filepath.Join(sRoot, "panes", "terminal_2"), cwdHash)
+	_ = atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_2")
+	_ = atomicWrite(filepath.Join(sRoot, "panes", "terminal_2"), cwdHash)
 
-	// implementer should be gone
 	_, err := resolveRole(nsDir, "implementer")
 	if err == nil {
 		t.Error("implementer should have been cleared")
 	}
 
-	// reviewer should exist
 	paneID, err := resolveRole(nsDir, "reviewer")
 	if err != nil {
 		t.Fatal(err)
@@ -182,18 +177,16 @@ func TestRegisterLatestWins(t *testing.T) {
 	cwdHash := hashString(cwd)
 	nsDir := filepath.Join(sRoot, "namespaces", cwdHash)
 
-	// Register terminal_5 as reviewer
-	atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_5")
-	atomicWrite(filepath.Join(sRoot, "panes", "terminal_5"), cwdHash)
+	_ = atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_5")
+	_ = atomicWrite(filepath.Join(sRoot, "panes", "terminal_5"), cwdHash)
 
-	// New pane registers as reviewer (latest wins)
 	oldPaneID, _ := resolveRole(nsDir, "reviewer")
 	if oldPaneID == "terminal_9" {
 		t.Fatal("unexpected")
 	}
-	os.Remove(filepath.Join(sRoot, "panes", oldPaneID))
-	atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_9")
-	atomicWrite(filepath.Join(sRoot, "panes", "terminal_9"), cwdHash)
+	_ = os.Remove(filepath.Join(sRoot, "panes", oldPaneID))
+	_ = atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_9")
+	_ = atomicWrite(filepath.Join(sRoot, "panes", "terminal_9"), cwdHash)
 
 	paneID, err := resolveRole(nsDir, "reviewer")
 	if err != nil {
@@ -203,7 +196,6 @@ func TestRegisterLatestWins(t *testing.T) {
 		t.Errorf("expected terminal_9, got %s", paneID)
 	}
 
-	// Old pane mapping should be gone
 	_, err = readFile(filepath.Join(sRoot, "panes", "terminal_5"))
 	if err == nil {
 		t.Error("old pane mapping should have been removed")
@@ -216,13 +208,11 @@ func TestExecDirByID(t *testing.T) {
 
 	execBase := filepath.Join(stateDir, "exec")
 
-	// Create exec dir with command
 	execID := "test123"
 	dir := filepath.Join(execBase, execID)
-	os.MkdirAll(dir, 0755)
-	atomicWrite(filepath.Join(dir, "command"), "echo hello")
+	_ = os.MkdirAll(dir, 0755)
+	_ = atomicWrite(filepath.Join(dir, "command"), "echo hello")
 
-	// Verify dir exists and command is readable
 	cmd, err := readFile(filepath.Join(dir, "command"))
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +221,6 @@ func TestExecDirByID(t *testing.T) {
 		t.Errorf("expected 'echo hello', got '%s'", cmd)
 	}
 
-	// Non-existent ID
 	badDir := filepath.Join(execBase, "nonexistent")
 	if _, err := os.Stat(badDir); err == nil {
 		t.Error("non-existent exec dir should not exist")
@@ -265,11 +254,8 @@ func TestResolveRoleForCommandFallbackCwd(t *testing.T) {
 	cwd := canonicalCwd()
 	nsDir := namespaceDir(sRoot, cwd)
 
-	atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_99")
+	_ = atomicWrite(filepath.Join(nsDir, "roles", "reviewer"), "terminal_99")
 
-	// Without ZELLIJ_PANE_ID, should fall back to cwd-based namespace
-	// Can't fully test resolveRoleForCommand because paneExists requires Zellij,
-	// but we can test the namespace resolution path
 	paneID, err := resolveRole(nsDir, "reviewer")
 	if err != nil {
 		t.Fatal(err)
@@ -320,10 +306,9 @@ func TestConfigMerge(t *testing.T) {
 	t.Setenv("PANECOM_STATE_DIR", filepath.Join(dir, "state"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 
-	// Global config
 	globalDir := filepath.Join(dir, "config", "panecom")
-	os.MkdirAll(globalDir, 0755)
-	os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(`
+	_ = os.MkdirAll(globalDir, 0755)
+	_ = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(`
 profiles:
   global-only:
     panes:
@@ -334,13 +319,11 @@ profiles:
         cmd: global-cmd
 `), 0644)
 
-	// Project config
-	projectDir := filepath.Join(dir, "state")
-	os.MkdirAll(projectDir, 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "state"), 0755)
 
 	origDir, _ := os.Getwd()
-	os.MkdirAll(filepath.Join(dir, "project", ".panecom"), 0755)
-	os.WriteFile(filepath.Join(dir, "project", ".panecom", "config.yaml"), []byte(`
+	_ = os.MkdirAll(filepath.Join(dir, "project", ".panecom"), 0755)
+	_ = os.WriteFile(filepath.Join(dir, "project", ".panecom", "config.yaml"), []byte(`
 profiles:
   project-only:
     panes:
@@ -350,23 +333,20 @@ profiles:
       - role: developer
         cmd: project-cmd
 `), 0644)
-	os.Chdir(filepath.Join(dir, "project"))
-	defer os.Chdir(origDir)
+	_ = os.Chdir(filepath.Join(dir, "project"))
+	defer func() { _ = os.Chdir(origDir) }()
 
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// global-only should exist
 	if _, ok := cfg.Profiles["global-only"]; !ok {
 		t.Error("global-only profile missing")
 	}
-	// project-only should exist
 	if _, ok := cfg.Profiles["project-only"]; !ok {
 		t.Error("project-only profile missing")
 	}
-	// shared should use project version
 	shared := cfg.Profiles["shared"]
 	if shared.Panes[0].Cmd != "project-cmd" {
 		t.Errorf("expected project-cmd, got %s", shared.Panes[0].Cmd)
@@ -392,7 +372,7 @@ func TestNamespaceForCurrentPane(t *testing.T) {
 
 	sRoot := filepath.Join(stateDir, "sessions", "abc")
 	cwdHash := hashString("/work/project")
-	atomicWrite(filepath.Join(sRoot, "panes", "terminal_3"), cwdHash)
+	_ = atomicWrite(filepath.Join(sRoot, "panes", "terminal_3"), cwdHash)
 
 	nsDir, err := namespaceForCurrentPane(sRoot, "terminal_3")
 	if err != nil {
@@ -403,9 +383,27 @@ func TestNamespaceForCurrentPane(t *testing.T) {
 		t.Errorf("expected %s, got %s", expected, nsDir)
 	}
 
-	// Unregistered pane
 	_, err = namespaceForCurrentPane(sRoot, "terminal_999")
 	if err == nil {
 		t.Error("expected error for unregistered pane")
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"simple", "simple"},
+		{"/usr/bin/panecom", "/usr/bin/panecom"},
+		{"path with spaces", "'path with spaces'"},
+		{"it's", "'it'\"'\"'s'"},
+		{"", "''"},
+	}
+	for _, tt := range tests {
+		got := shellQuote(tt.input)
+		if got != tt.expected {
+			t.Errorf("shellQuote(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
 	}
 }
