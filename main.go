@@ -554,7 +554,8 @@ func cmdExecRun(execID string) {
 	_ = stdoutPW.Close()
 	_ = stderrPW.Close()
 
-	writeErrs := make(chan error, 2)
+	stdoutErrCh := make(chan error, 1)
+	stderrErrCh := make(chan error, 1)
 
 	go func() {
 		var writeErr error
@@ -572,7 +573,7 @@ func cmdExecRun(execID string) {
 			}
 		}
 		_ = stdoutPR.Close()
-		writeErrs <- writeErr
+		stdoutErrCh <- writeErr
 	}()
 
 	go func() {
@@ -591,11 +592,11 @@ func cmdExecRun(execID string) {
 			}
 		}
 		_ = stderrPR.Close()
-		writeErrs <- writeErr
+		stderrErrCh <- writeErr
 	}()
 
-	stdoutWriteErr := <-writeErrs
-	stderrWriteErr := <-writeErrs
+	stdoutWriteErr := <-stdoutErrCh
+	stderrWriteErr := <-stderrErrCh
 
 	exitCode := 0
 	if err := cmd.Wait(); err != nil {
@@ -606,17 +607,25 @@ func cmdExecRun(execID string) {
 		}
 	}
 
+	protocolErr := false
 	if err := outFile.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "panecom: failed to close stdout file: %s\n", err.Error())
+		protocolErr = true
 	}
 	if err := errFile.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "panecom: failed to close stderr file: %s\n", err.Error())
+		protocolErr = true
 	}
 	if stdoutWriteErr != nil {
 		fmt.Fprintf(os.Stderr, "panecom: stdout write error: %s\n", stdoutWriteErr.Error())
+		protocolErr = true
 	}
 	if stderrWriteErr != nil {
 		fmt.Fprintf(os.Stderr, "panecom: stderr write error: %s\n", stderrWriteErr.Error())
+		protocolErr = true
+	}
+	if protocolErr && exitCode == 0 {
+		exitCode = 1
 	}
 	if err := os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "panecom: failed to write exit code: %s\n", err.Error())
