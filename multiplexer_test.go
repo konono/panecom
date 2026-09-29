@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 )
 
@@ -129,8 +128,7 @@ func TestDetectMultiplexerFlagOverridesAll(t *testing.T) {
 }
 
 func TestSessionRootZellijCompat(t *testing.T) {
-	os.Setenv("PANECOM_STATE_DIR", "/tmp/test-state")
-	defer os.Unsetenv("PANECOM_STATE_DIR")
+	t.Setenv("PANECOM_STATE_DIR", "/tmp/test-state")
 
 	zellijRoot := sessionRoot("zellij", "my-session")
 	expectedHash := hashString("my-session")
@@ -140,8 +138,7 @@ func TestSessionRootZellijCompat(t *testing.T) {
 }
 
 func TestSessionRootTmuxSeparation(t *testing.T) {
-	os.Setenv("PANECOM_STATE_DIR", "/tmp/test-state")
-	defer os.Unsetenv("PANECOM_STATE_DIR")
+	t.Setenv("PANECOM_STATE_DIR", "/tmp/test-state")
 
 	zellijRoot := sessionRoot("zellij", "my-session")
 	tmuxRoot := sessionRoot("tmux", "my-session")
