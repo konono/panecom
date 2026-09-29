@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/konono/panecom/compare/v0.2.0...v0.3.0) (2026-09-29)
+
+
+### Features
+
+* add tmux backend with multiplexer plugin architecture ([#7](https://github.com/konono/panecom/issues/7)) ([1395ee0](https://github.com/konono/panecom/commit/1395ee047b4020aca84f16ba24de738a129b9493))
+* add update command and --version flag ([#9](https://github.com/konono/panecom/issues/9)) ([642f469](https://github.com/konono/panecom/commit/642f469ab5808e174fb131690f447767e70d482f))
+
+
+### Bug Fixes
+
+* use t.Setenv instead of os.Setenv in tests ([662663b](https://github.com/konono/panecom/commit/662663b979c617e4afcf730d51690e2ab7c36249))
+
 ## [0.2.0](https://github.com/konono/panecom/compare/v0.1.2...v0.2.0) (2026-09-29)
 
 
