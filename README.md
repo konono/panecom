@@ -112,6 +112,16 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 
 - `--timeout N` — コマンド完了待ちのタイムアウト秒数（デフォルト: `30`）。タイムアウトは呼び出し側の待機を止めるだけで、**対象 pane で実行中のコマンドは停止しません**
 
+ターミナルには `PANECOM_TOKEN=<token> panecom exec -- $'<command>'` と表示されます。`PANECOM_TOKEN` は request の一意性を保証するためのプロトコル要素で、省略できません。コマンドは先頭スペース付きで送信されるため、シェルの `HIST_IGNORE_SPACE` が有効であればヒストリに記録されません。
+
+```bash
+# ~/.zshrc に追加（推奨）
+setopt HIST_IGNORE_SPACE
+
+# bash の場合
+export HISTCONTROL=ignorespace
+```
+
 ### profile
 
 - `-f` / `--focus` — 作成したタブにフォーカスを移す（デフォルト: 元のタブに戻る）
@@ -196,7 +206,14 @@ role はセッション + register 時の作業ディレクトリで namespace �
 │       ├── panes/
 │       ├── namespaces/
 │       └── .session
-└── exec/                # exec の一時ファイル（自動削除）
+├── exec.lock            # exec 実行中ロック（同時実行防止、atomic）
+└── exec/                # exec のランタイム状態
+    ├── current -> <token> # 最新 exec へのシンボリックリンク
+    └── <token>/          # request ごとのデータ
+        ├── command       # 実行中のコマンド
+        ├── stdout        # stdout（リアルタイム書き込み）
+        ├── stderr        # stderr（リアルタイム書き込み）
+        └── exitcode      # 終了コード（完了時に作成）
 ```
 
 `sessions/` と `exec/` はランタイムデータです。`.gitignore` に追加してください:
@@ -204,9 +221,12 @@ role はセッション + register 時の作業ディレクトリで namespace �
 ```
 .panecom/sessions/
 .panecom/exec/
+.panecom/exec.lock
 ```
 
-exec のタイムアウト時は `.panecom/exec/<id>/` が残る場合があります。手動で削除して問題ありません。
+exec は同時に1つだけ実行できます（`exec.lock` で排他制御）。実行中に別の exec を開始するとエラーになります。
+完了済みの古い exec データは次回の exec 開始時に自動削除されます。
+実行中の進捗は `cat .panecom/exec/current/stdout` で確認できます。
 
 ## Safety
 

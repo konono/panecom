@@ -6,6 +6,7 @@ bin/
 # Runtime state
 .panecom/sessions/
 .panecom/exec/
+.panecom/exec.lock
 
 # IDE
 .idea/

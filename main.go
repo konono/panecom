@@ -16,7 +16,6 @@ import (
 )
 
 var rolePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-var execIDPattern = regexp.MustCompile(`^[a-z0-9]+$`)
 
 func die(msg string) {
 	fmt.Fprintf(os.Stderr, "panecom: %s\n", msg)
@@ -218,17 +217,6 @@ func cmdRegister(role string) {
 		die("failed to write pane mapping: " + err.Error())
 	}
 
-	selfPath, err := os.Executable()
-	if err != nil {
-		die("cannot determine panecom binary path: " + err.Error())
-	}
-	if resolved, err := filepath.EvalSymlinks(selfPath); err == nil {
-		selfPath = resolved
-	}
-	if err := atomicWrite(filepath.Join(sRoot, "panes", paneID+".bin"), selfPath); err != nil {
-		die("failed to write binary path: " + err.Error())
-	}
-
 	_ = exec.Command("zellij", "action", "rename-pane", "--pane-id", paneID, fmt.Sprintf("panecom:%s", role)).Run()
 
 	fmt.Println(role)
@@ -237,18 +225,6 @@ func cmdRegister(role string) {
 func cmdOpen(role string, direction string, binPath string) {
 	validateRole(role)
 	myPaneID := requireCurrentPaneID()
-
-	selfPath := binPath
-	if selfPath == "" {
-		var err error
-		selfPath, err = os.Executable()
-		if err != nil {
-			die("cannot determine panecom binary path: " + err.Error())
-		}
-		if resolved, err := filepath.EvalSymlinks(selfPath); err == nil {
-			selfPath = resolved
-		}
-	}
 
 	cwd := canonicalCwd()
 
@@ -267,7 +243,7 @@ func cmdOpen(role string, direction string, binPath string) {
 
 	numID := strings.TrimPrefix(newPaneID, "terminal_")
 
-	registerCmd := fmt.Sprintf("ZELLIJ_PANE_ID=%s %q register %s", numID, selfPath, role)
+	registerCmd := fmt.Sprintf("ZELLIJ_PANE_ID=%s panecom register %s", numID, role)
 	if err := sendToPane(newPaneID, registerCmd); err != nil {
 		die(fmt.Sprintf("failed to register in new pane: %s", err.Error()))
 	}
@@ -379,7 +355,7 @@ func sendToPane(paneID, message string) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	cmd = exec.Command("zellij", "action", "write", "--pane-id", paneID, "13")
 	return cmd.Run()
 }
@@ -413,49 +389,115 @@ func cmdShare(toRole string, full bool) {
 	}
 }
 
-func targetBinaryPath(sRoot, paneID string) string {
-	binPath, err := readFile(filepath.Join(sRoot, "panes", paneID+".bin"))
-	if err != nil {
-		return ""
+func execLockPath() string {
+	return filepath.Join(stateRoot(), "exec.lock")
+}
+
+func acquireExecLock(token string) {
+	lockDir := execLockPath()
+	if err := os.MkdirAll(filepath.Dir(lockDir), 0755); err != nil {
+		die("failed to create state dir: " + err.Error())
 	}
-	return binPath
+
+	// Mkdir is atomic — only one process succeeds
+	if err := os.Mkdir(lockDir, 0755); err == nil {
+		// We own the lock — write token
+		if wErr := os.WriteFile(filepath.Join(lockDir, "token"), []byte(token), 0644); wErr != nil {
+			_ = os.RemoveAll(lockDir)
+			die("failed to write lock token: " + wErr.Error())
+		}
+		return
+	}
+
+	// Lock exists — check for stale (runner completed)
+	oldToken, readErr := readFile(filepath.Join(lockDir, "token"))
+	if readErr != nil {
+		die("another exec is already running")
+	}
+	oldExitcode := filepath.Join(stateRoot(), "exec", oldToken, "exitcode")
+	if _, statErr := os.Stat(oldExitcode); statErr != nil {
+		die("another exec is already running")
+	}
+
+	// Stale: atomically claim by renaming the lock dir
+	recoverDir := lockDir + ".recover." + token
+	if err := os.Rename(lockDir, recoverDir); err != nil {
+		// Another process already claimed it
+		die("another exec is already running")
+	}
+	_ = os.RemoveAll(recoverDir)
+
+	// Create fresh lock
+	if err := os.Mkdir(lockDir, 0755); err != nil {
+		die("another exec is already running")
+	}
+	if wErr := os.WriteFile(filepath.Join(lockDir, "token"), []byte(token), 0644); wErr != nil {
+		_ = os.RemoveAll(lockDir)
+		die("failed to write lock token: " + wErr.Error())
+	}
+}
+
+func execDieWithCleanup(token, execDir, msg string) {
+	// Write exitcode so stale detection can recover the lock
+	exitcodeFile := filepath.Join(execDir, "exitcode")
+	if _, err := os.Stat(exitcodeFile); err != nil {
+		_ = os.MkdirAll(execDir, 0755)
+		if wErr := os.WriteFile(exitcodeFile, []byte("1"), 0644); wErr != nil {
+			fmt.Fprintf(os.Stderr, "panecom: failed to write exit code for cleanup: %s\n", wErr.Error())
+		}
+	}
+	die(msg)
 }
 
 func cmdExecRemote(role, command string, timeoutSec float64) {
 	paneID := resolveRoleForCommand(role)
-	sRoot := sessionRoot(zellijSessionName())
 
-	execID := randomID(12)
-	execDir := filepath.Join(stateRoot(), "exec", execID)
-	if err := os.MkdirAll(execDir, 0755); err != nil {
-		die("failed to create exec dir: " + err.Error())
+	token := fmt.Sprintf("%d.%d", os.Getpid(), time.Now().UnixNano())
+
+	acquireExecLock(token)
+
+	execBase := filepath.Join(stateRoot(), "exec")
+	if err := os.MkdirAll(execBase, 0755); err != nil {
+		execDieWithCleanup(token, filepath.Join(execBase, token), "failed to create exec base: "+err.Error())
 	}
-	completed := false
-	defer func() {
-		if completed {
-			_ = os.RemoveAll(execDir)
-		}
-	}()
+	execDir := filepath.Join(execBase, token)
+	if err := os.MkdirAll(execDir, 0755); err != nil {
+		execDieWithCleanup(token, execDir, "failed to create exec dir: "+err.Error())
+	}
+
+	// Update "current" symlink for progress monitoring (cat .panecom/exec/current/stdout)
+	currentLink := filepath.Join(execBase, "current")
+	_ = os.Remove(currentLink)
+	if err := os.Symlink(token, currentLink); err != nil {
+		fmt.Fprintf(os.Stderr, "panecom: failed to create progress symlink: %s\n", err.Error())
+	}
 
 	stdoutFile := filepath.Join(execDir, "stdout")
 	stderrFile := filepath.Join(execDir, "stderr")
 	exitcodeFile := filepath.Join(execDir, "exitcode")
 
 	if err := atomicWrite(filepath.Join(execDir, "command"), command); err != nil {
-		die("failed to write command: " + err.Error())
+		execDieWithCleanup(token, execDir, "failed to write command: "+err.Error())
 	}
 
-	targetBin := targetBinaryPath(sRoot, paneID)
-	if targetBin == "" {
-		die(fmt.Sprintf("panecom binary path not found for '%s' — re-register the role", role))
+	// Clean up old completed exec dirs
+	entries, _ := os.ReadDir(execBase)
+	for _, e := range entries {
+		if e.Name() == token || e.Name() == "current" {
+			continue
+		}
+		completed := filepath.Join(execBase, e.Name(), "exitcode")
+		if _, err := os.Stat(completed); err == nil {
+			_ = os.RemoveAll(filepath.Join(execBase, e.Name()))
+		}
 	}
 
-	quotedBin := shellQuote(targetBin)
 	escaped := strings.ReplaceAll(command, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, "'", `\'`)
 	quotedCmd := "$'" + escaped + "'"
-	if err := sendToPane(paneID, fmt.Sprintf("PANECOM_EXEC=%s %s exec -- %s", execID, quotedBin, quotedCmd)); err != nil {
-		die(fmt.Sprintf("failed to send command to '%s': %s", role, err.Error()))
+	// Leading space suppresses history when HIST_IGNORE_SPACE is set in shell
+	if err := sendToPane(paneID, fmt.Sprintf(" PANECOM_TOKEN=%s panecom exec -- %s", token, quotedCmd)); err != nil {
+		execDieWithCleanup(token, execDir, fmt.Sprintf("failed to send command to '%s': %s", role, err.Error()))
 	}
 
 	timeout := time.Duration(timeoutSec * float64(time.Second))
@@ -467,6 +509,7 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 			break
 		}
 		if time.Now().After(deadline) {
+			// Lock stays — runner will write exitcode, next acquirer does stale recovery
 			die(fmt.Sprintf("timeout waiting for command to complete on '%s' (%.0fs)", role, timeoutSec))
 		}
 		time.Sleep(pollInterval)
@@ -487,45 +530,57 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 		_, _ = os.Stderr.Write(data)
 	}
 
-	completed = true
-	_ = os.RemoveAll(execDir)
+	// Lock is NOT released here. Next acquirer's stale detection handles cleanup.
+	// This avoids TOCTOU between read-token and remove-lock.
 
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}
 }
 
-func cmdExecRun() {
-	execID := os.Getenv("PANECOM_EXEC")
-	if execID == "" {
-		die("PANECOM_EXEC not set")
+func runnerDie(exitcodeFile string, code int, msg string) {
+	if err := os.WriteFile(exitcodeFile, []byte(strconv.Itoa(code)), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "panecom: failed to write exit code: %s\n", err.Error())
 	}
-	if !execIDPattern.MatchString(execID) {
-		die(fmt.Sprintf("invalid exec ID: %s", execID))
+	die(msg)
+}
+
+func cmdExecRun(token string) {
+	if token == "" {
+		die("PANECOM_TOKEN not set")
 	}
-	execDir := filepath.Join(stateRoot(), "exec", execID)
+
+	execDir := filepath.Join(stateRoot(), "exec", token)
+	exitcodeFile := filepath.Join(execDir, "exitcode")
+
 	if _, err := os.Stat(execDir); err != nil {
-		die(fmt.Sprintf("exec dir not found: %s", execID))
+		// No exec dir — write exitcode to enable stale recovery
+		_ = os.MkdirAll(execDir, 0755)
+		runnerDie(exitcodeFile, 1, fmt.Sprintf("exec dir not found for token: %s", token))
+	}
+
+	lockToken, err := readFile(filepath.Join(execLockPath(), "token"))
+	if err != nil || lockToken != token {
+		runnerDie(exitcodeFile, 1, "exec token mismatch — stale or conflicting request")
 	}
 
 	command, err := readFile(filepath.Join(execDir, "command"))
 	if err != nil {
-		die("failed to read command: " + err.Error())
+		runnerDie(exitcodeFile, 1, "failed to read command: "+err.Error())
 	}
 
 	stdoutFile := filepath.Join(execDir, "stdout")
 	stderrFile := filepath.Join(execDir, "stderr")
-	exitcodeFile := filepath.Join(execDir, "exitcode")
 
 	outFile, err := os.Create(stdoutFile)
 	if err != nil {
-		die("failed to create stdout file: " + err.Error())
+		runnerDie(exitcodeFile, 1, "failed to create stdout file: "+err.Error())
 	}
 	defer func() { _ = outFile.Close() }()
 
 	errFile, err := os.Create(stderrFile)
 	if err != nil {
-		die("failed to create stderr file: " + err.Error())
+		runnerDie(exitcodeFile, 1, "failed to create stderr file: "+err.Error())
 	}
 	defer func() { _ = errFile.Close() }()
 
@@ -543,11 +598,13 @@ func cmdExecRun() {
 
 	stdoutPR, stdoutPW, err := os.Pipe()
 	if err != nil {
-		die("failed to create stdout pipe: " + err.Error())
+		runnerDie(exitcodeFile, 1, "failed to create stdout pipe: "+err.Error())
 	}
 	stderrPR, stderrPW, err := os.Pipe()
 	if err != nil {
-		die("failed to create stderr pipe: " + err.Error())
+		_ = stdoutPW.Close()
+		_ = stdoutPR.Close()
+		runnerDie(exitcodeFile, 1, "failed to create stderr pipe: "+err.Error())
 	}
 
 	cmd.Stdout = stdoutPW
@@ -644,6 +701,7 @@ func cmdExecRun() {
 	if err := os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "panecom: failed to write exit code: %s\n", err.Error())
 	}
+	// Lock is NOT released here. Stale detection by next acquirer handles cleanup.
 }
 
 func shellQuote(s string) string {
@@ -656,23 +714,6 @@ func shellQuote(s string) string {
 		}
 	}
 	return s
-}
-
-func randomID(n int) string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	f, err := os.Open("/dev/urandom")
-	if err != nil {
-		die("cannot open /dev/urandom")
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.Read(b); err != nil {
-		die("cannot read /dev/urandom: " + err.Error())
-	}
-	for i := range b {
-		b[i] = chars[int(b[i])%len(chars)]
-	}
-	return string(b)
 }
 
 type paneConfig struct {
@@ -805,19 +846,7 @@ func cmdProfile(name string, binPath string, focus bool) {
 		die(fmt.Sprintf("profile '%s' has no panes defined", name))
 	}
 
-	selfPath := binPath
-	if selfPath == "" {
-		selfPath, err = os.Executable()
-		if err != nil {
-			die("cannot determine panecom binary path: " + err.Error())
-		}
-	}
-	if abs, err := filepath.Abs(selfPath); err == nil {
-		selfPath = abs
-	}
-	if resolved, err := filepath.EvalSymlinks(selfPath); err == nil {
-		selfPath = resolved
-	}
+	_ = binPath // reserved for future use
 
 	cwd := canonicalCwd()
 	myPaneID := currentPaneID()
@@ -901,7 +930,7 @@ func cmdProfile(name string, binPath string, focus bool) {
 
 	for _, p := range panes {
 		numID := strings.TrimPrefix(p.paneID, "terminal_")
-		registerCmd := fmt.Sprintf("cd %q && ZELLIJ_PANE_ID=%s %q register %s", cwd, numID, selfPath, p.cfg.Role)
+		registerCmd := fmt.Sprintf("cd %q && ZELLIJ_PANE_ID=%s panecom register %s", cwd, numID, p.cfg.Role)
 		if err := sendToPane(p.paneID, registerCmd); err != nil {
 			die(fmt.Sprintf("failed to register role '%s': %s", p.cfg.Role, err.Error()))
 		}
@@ -1032,7 +1061,7 @@ func main() {
 	case "exec":
 		rest := args[1:]
 		if len(rest) >= 1 && rest[0] == "--" {
-			cmdExecRun()
+			cmdExecRun(os.Getenv("PANECOM_TOKEN"))
 			return
 		}
 		timeoutSec := 30.0
