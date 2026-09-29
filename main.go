@@ -203,6 +203,8 @@ func cmdOpen(role string, direction string, binPath string) {
 		die(err.Error())
 	}
 
+	time.Sleep(1 * time.Second)
+
 	registerCmd := fmt.Sprintf("PANECOM_MUX=%s panecom register %s", mux.Kind(), role)
 	if err := sendToPane(newPaneID, registerCmd); err != nil {
 		die(fmt.Sprintf("failed to register in new pane: %s", err.Error()))
