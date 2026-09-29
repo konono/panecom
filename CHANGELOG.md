@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/konono/panecom/compare/v0.1.2...v0.2.0) (2026-09-29)
+
+
+### Features
+
+* add -l/--lines option to dump and share commands ([#5](https://github.com/konono/panecom/issues/5)) ([bd9bc4b](https://github.com/konono/panecom/commit/bd9bc4b4092f05e1801864bacf8864150cb0dce2))
+
 ## [0.1.2](https://github.com/konono/panecom/compare/v0.1.1...v0.1.2) (2026-09-29)
 
 
