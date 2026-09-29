@@ -545,49 +545,57 @@ func cmdExecRun(execID string) {
 		_ = stdoutPR.Close()
 		_ = stderrPR.Close()
 		fmt.Fprintf(os.Stderr, "panecom: failed to start command: %s\n", err.Error())
-		_ = os.WriteFile(exitcodeFile, []byte("127"), 0644)
+		if wErr := os.WriteFile(exitcodeFile, []byte("127"), 0644); wErr != nil {
+			fmt.Fprintf(os.Stderr, "panecom: failed to write exit code: %s\n", wErr.Error())
+		}
 		return
 	}
 
 	_ = stdoutPW.Close()
 	_ = stderrPW.Close()
 
-	done := make(chan struct{}, 2)
+	writeErrs := make(chan error, 2)
 
 	go func() {
+		var writeErr error
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := stdoutPR.Read(buf)
 			if n > 0 {
 				_, _ = os.Stdout.Write(buf[:n])
-				_, _ = outFile.Write(buf[:n])
+				if _, err := outFile.Write(buf[:n]); err != nil && writeErr == nil {
+					writeErr = err
+				}
 			}
 			if readErr != nil {
 				break
 			}
 		}
 		_ = stdoutPR.Close()
-		done <- struct{}{}
+		writeErrs <- writeErr
 	}()
 
 	go func() {
+		var writeErr error
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := stderrPR.Read(buf)
 			if n > 0 {
 				_, _ = os.Stderr.Write(buf[:n])
-				_, _ = errFile.Write(buf[:n])
+				if _, err := errFile.Write(buf[:n]); err != nil && writeErr == nil {
+					writeErr = err
+				}
 			}
 			if readErr != nil {
 				break
 			}
 		}
 		_ = stderrPR.Close()
-		done <- struct{}{}
+		writeErrs <- writeErr
 	}()
 
-	<-done
-	<-done
+	stdoutWriteErr := <-writeErrs
+	stderrWriteErr := <-writeErrs
 
 	exitCode := 0
 	if err := cmd.Wait(); err != nil {
@@ -598,9 +606,21 @@ func cmdExecRun(execID string) {
 		}
 	}
 
-	_ = outFile.Close()
-	_ = errFile.Close()
-	_ = os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644)
+	if err := outFile.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "panecom: failed to close stdout file: %s\n", err.Error())
+	}
+	if err := errFile.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "panecom: failed to close stderr file: %s\n", err.Error())
+	}
+	if stdoutWriteErr != nil {
+		fmt.Fprintf(os.Stderr, "panecom: stdout write error: %s\n", stdoutWriteErr.Error())
+	}
+	if stderrWriteErr != nil {
+		fmt.Fprintf(os.Stderr, "panecom: stderr write error: %s\n", stderrWriteErr.Error())
+	}
+	if err := os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "panecom: failed to write exit code: %s\n", err.Error())
+	}
 }
 
 func shellQuote(s string) string {
