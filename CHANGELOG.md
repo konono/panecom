@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.2](https://github.com/konono/panecom/compare/v0.1.1...v0.1.2) (2026-09-29)
+
+
+### Bug Fixes
+
+* disable pagers in exec to prevent hanging ([8b26478](https://github.com/konono/panecom/commit/8b264784b77d94e68a782b6d590d723ccab2a6d7))
+* prevent interactive commands from hanging exec ([1c7a1e5](https://github.com/konono/panecom/commit/1c7a1e54cc56aab055f9dc189d5eb9b36cee42b4))
+* prevent interactive commands from hanging exec ([573e5c8](https://github.com/konono/panecom/commit/573e5c82f3df184f26ad1e31bc5651bb9c35c9c3))
+* remove redundant command echo in exec runner ([e84b685](https://github.com/konono/panecom/commit/e84b68501c10e36e078cf1234e56beb193091527))
+* show command instead of execID in terminal display ([0baa011](https://github.com/konono/panecom/commit/0baa0111db5f134855e9ddd2838ced4837849926))
+* use PATH-based binary name, cleanup orphan exec dirs, improve skill ([#4](https://github.com/konono/panecom/issues/4)) ([7d514ed](https://github.com/konono/panecom/commit/7d514ed5f26cf09ce104ec7f79245651a31c5e35))
+
 ## [0.1.1](https://github.com/konono/panecom/compare/v0.1.0...v0.1.1) (2026-09-29)
 
 
