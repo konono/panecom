@@ -23,11 +23,11 @@ go build -o bin/panecom .
 
 ビルドしたバイナリを PATH の通った場所にコピーしてください。
 
-### リリースバイナリ
+### リリースバイナリ（初回リリース後）
 
-[Releases](https://github.com/konono/panecom/releases) ページからプラットフォームに合ったバイナリをダウンロードできます。
+リリースが公開されると、[Releases](https://github.com/konono/panecom/releases) ページからプラットフォームに合ったバイナリをダウンロードできます。
 
-### go install（リポジトリ公開後）
+### go install（初回リリース後）
 
 ```bash
 go install github.com/konono/panecom@latest
@@ -55,10 +55,11 @@ zellij
 panecom register developer
 ```
 
-3. 別の pane（Pane B）を開き、reviewer として登録:
+3. 別の pane（Pane B）を開き、reviewer として登録します。Pane B では Claude や Codex などのエージェントを起動してください:
 
 ```bash
 panecom register reviewer
+codex  # または claude 等
 ```
 
 > 両方の pane は **同じ Zellij セッション内**、**同じディレクトリ** から register してください。これが同じ namespace に所属する条件です。
@@ -67,17 +68,19 @@ panecom register reviewer
 
 ```bash
 # Pane A から
-panecom resolve reviewer      # → terminal_N
-panecom send reviewer "hello"  # Pane B に "hello" + Enter が送られる
-panecom dump reviewer          # Pane B の現在画面を取得
+panecom resolve reviewer                    # → terminal_N
+panecom send reviewer "コードをレビューしてください"  # Pane B のエージェントに送られる
+panecom dump reviewer                       # Pane B の現在画面を取得
 ```
+
+> **注意**: `send` は対象 pane に文字列 + Enter を注入します。対象が素のシェルの場合、送信内容がコマンドとして実行されます。エージェントの入力として使うか、`exec` コマンドを使ってください。
 
 ### よくあるエラー
 
 | エラー | 原因 | 対処 |
 |---|---|---|
 | `ZELLIJ_SESSION_NAME not set` | Zellij 外で実行 | Zellij セッション内で実行する |
-| `ZELLIJ_PANE_ID not set` | 環境変数が未設定 | `ZELLIJ_PANE_ID=N panecom ...` で指定 |
+| `ZELLIJ_PANE_ID not set` | Zellij が起動した pane 外で実行 | Zellij の terminal pane 内で実行する。pane を閉じて開き直す |
 | `role 'X' is not registered` | 相手が未登録 or 別 namespace | 同じディレクトリから register する |
 | `role 'X' points to stale pane` | 相手の pane が閉じられた | 相手側で再度 `panecom register X` |
 
@@ -103,7 +106,7 @@ panecom dump reviewer          # Pane B の現在画面を取得
 
 ### open
 
-- `-d right|down` — pane を開く方向（デフォルト: `right`）
+- `-d right|down` — pane を開く方向（デフォルト: 未指定で Zellij の自動配置）
 
 ### exec
 
@@ -179,7 +182,11 @@ role はセッション + register 時の作業ディレクトリで namespace �
 
 ### State
 
-状態は `.panecom/` (プロジェクトルート) に保存されます。`PANECOM_STATE_DIR` 環境変数でオーバーライド可能です。
+状態ディレクトリは以下の優先順で決定されます:
+
+1. `PANECOM_STATE_DIR` 環境変数（設定されていれば最優先）
+2. cwd から親ディレクトリを遡って見つかった既存の `.panecom/`
+3. いずれもなければ `cwd/.panecom/` を新規作成
 
 ```
 .panecom/
