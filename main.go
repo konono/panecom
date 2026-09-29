@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/konono/panecom/update"
 	"gopkg.in/yaml.v3"
 )
 
@@ -889,6 +890,8 @@ Commands:
   share [--full] [-l N] <role>    Share this pane's screen with <role>
   exec [--timeout N] <role> <cmd> Run command on <role>, return output
   profile [-f] <name>            Launch profile from .panecom/config.yaml
+  update                         Update panecom to the latest version
+  --version                      Show version
 
 Multiplexer selection (in priority order):
   --mux flag > PANECOM_MUX env > auto-detect (ZELLIJ_SESSION_NAME > TMUX)
@@ -912,6 +915,14 @@ func main() {
 	}
 
 	switch args[0] {
+	case "--version":
+		fmt.Printf("panecom %s\n", Version)
+		return
+	case "update":
+		if err := update.Run(Version); err != nil {
+			die(err.Error())
+		}
+		return
 	case "exec":
 		rest := args[1:]
 		if len(rest) >= 1 && rest[0] == "--" {

@@ -114,6 +114,8 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | `share [--full] <role>` | 自分の画面を相手に共有 |
 | `exec [--timeout N] <role> <cmd>` | 対象 pane でコマンドを実行し結果を返す |
 | `profile [-f] <name>` | プロファイルから環境を構築 |
+| `update` | 最新版に自己更新 |
+| `--version` | バージョンを表示 |
 
 ## オプション詳細
 
@@ -143,6 +145,16 @@ export HISTCONTROL=ignorespace
 
 - `-f` / `--focus` — 作成したタブにフォーカスを移す（デフォルト: 元のタブに戻る）
 
+### update
+
+- GitHub Releases から最新版をダウンロードし、実行中のバイナリを自動で置き換えます
+- 現在のバージョンが最新の場合は何もしません
+
+```bash
+panecom update           # 最新版に更新
+panecom --version        # 現在のバージョンを確認
+```
+
 ### role 名の制約
 
 `[A-Za-z0-9][A-Za-z0-9._-]*` にマッチする必要があります。`/` や `..` はパストラバーサル防止のため使用できません。
@@ -165,8 +177,39 @@ profiles:
 ```
 
 ```bash
-panecom profile review
+panecom profile review        # review 環境を立ち上げ
+panecom profile -f review     # 作成した pane にフォーカスを移す
 ```
+
+### ユースケース例
+
+**AI ペアプログラミング**: Claude と Codex で相互レビュー
+
+```yaml
+profiles:
+  pair:
+    panes:
+      - role: developer
+        cmd: claude
+        foreground: true
+      - role: reviewer
+        cmd: codex
+```
+
+**共有ターミナル付き開発**: AI エージェント + コマンド実行用 pane
+
+```yaml
+profiles:
+  dev:
+    panes:
+      - role: developer
+        cmd: claude
+        foreground: true
+      - role: terminal
+        direction: down
+```
+
+`panecom profile dev` 後、developer の Claude から `panecom exec terminal "make test"` でターミナルにコマンドを送れます。
 
 ### プロファイルの各フィールド
 
