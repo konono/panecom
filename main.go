@@ -218,14 +218,8 @@ func cmdRegister(role string) {
 		die("failed to write pane mapping: " + err.Error())
 	}
 
-	selfPath, err := os.Executable()
-	if err != nil {
-		die("cannot determine panecom binary path: " + err.Error())
-	}
-	if resolved, err := filepath.EvalSymlinks(selfPath); err == nil {
-		selfPath = resolved
-	}
-	if err := atomicWrite(filepath.Join(sRoot, "panes", paneID+".bin"), selfPath); err != nil {
+	binName := resolveBinName()
+	if err := atomicWrite(filepath.Join(sRoot, "panes", paneID+".bin"), binName); err != nil {
 		die("failed to write binary path: " + err.Error())
 	}
 
@@ -441,6 +435,8 @@ func cmdExecRemote(role, command string, timeoutSec float64) {
 	stderrFile := filepath.Join(execDir, "stderr")
 	exitcodeFile := filepath.Join(execDir, "exitcode")
 
+	cleanupOrphanExecDirs()
+
 	if err := atomicWrite(filepath.Join(execDir, "command"), command); err != nil {
 		die("failed to write command: " + err.Error())
 	}
@@ -530,7 +526,15 @@ func cmdExecRun() {
 	defer func() { _ = errFile.Close() }()
 
 	cmd := exec.Command("sh", "-c", command)
-	cmd.Env = append(os.Environ(), "PAGER=cat", "SYSTEMD_PAGER=cat", "GIT_PAGER=cat")
+	cmd.Env = append(os.Environ(),
+		"PAGER=cat",
+		"SYSTEMD_PAGER=cat",
+		"GIT_PAGER=cat",
+		"DEBIAN_FRONTEND=noninteractive",
+		"GIT_TERMINAL_PROMPT=0",
+		"SSH_BATCH_MODE=yes",
+		"PYTHONDONTWRITEBYTECODE=1",
+	)
 	cmd.Stdin = nil
 
 	stdoutPR, stdoutPW, err := os.Pipe()
@@ -636,6 +640,40 @@ func cmdExecRun() {
 	if err := os.WriteFile(exitcodeFile, []byte(strconv.Itoa(exitCode)), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "panecom: failed to write exit code: %s\n", err.Error())
 	}
+}
+
+func cleanupOrphanExecDirs() {
+	execBase := filepath.Join(stateRoot(), "exec")
+	entries, err := os.ReadDir(execBase)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		dir := filepath.Join(execBase, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "exitcode")); err == nil {
+			_ = os.RemoveAll(dir)
+		}
+	}
+}
+
+func resolveBinName() string {
+	selfPath, err := os.Executable()
+	if err != nil {
+		return "panecom"
+	}
+	if resolved, err := filepath.EvalSymlinks(selfPath); err == nil {
+		selfPath = resolved
+	}
+	base := filepath.Base(selfPath)
+	// If the binary is findable in PATH, use just the name
+	if p, err := exec.LookPath(base); err == nil {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			if resolved == selfPath {
+				return base
+			}
+		}
+	}
+	return selfPath
 }
 
 func shellQuote(s string) string {
