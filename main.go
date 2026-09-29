@@ -322,13 +322,25 @@ func cmdResolve(role string) {
 	fmt.Println(paneID)
 }
 
-func cmdDump(role string, full bool) {
+func cmdDump(role string, full bool, lines int) {
 	paneID := resolveRoleForCommand(role)
 	screen, err := dumpPane(paneID, full)
 	if err != nil {
 		die(fmt.Sprintf("failed to dump screen for '%s': %s", role, err.Error()))
 	}
+	if lines > 0 {
+		screen = tailLines(screen, lines)
+	}
 	fmt.Print(screen)
+}
+
+func tailLines(s string, n int) string {
+	s = strings.TrimRight(s, "\n")
+	all := strings.Split(s, "\n")
+	if len(all) <= n {
+		return s + "\n"
+	}
+	return strings.Join(all[len(all)-n:], "\n") + "\n"
 }
 
 func cmdSend(role, message string) {
@@ -360,7 +372,7 @@ func sendToPane(paneID, message string) error {
 	return cmd.Run()
 }
 
-func cmdShare(toRole string, full bool) {
+func cmdShare(toRole string, full bool, lines int) {
 	fromPaneID := requireCurrentPaneID()
 	toPaneID := resolveRoleForCommand(toRole)
 
@@ -383,6 +395,9 @@ func cmdShare(toRole string, full bool) {
 		die(fmt.Sprintf("failed to dump own screen: %s", err.Error()))
 	}
 
+	if lines > 0 {
+		screen = tailLines(screen, lines)
+	}
 	msg := fmt.Sprintf("[panecom:share from=%s]\n%s\n[/panecom:share]", fromRole, strings.TrimRight(screen, "\n"))
 	if err := sendToPane(toPaneID, msg); err != nil {
 		die(fmt.Sprintf("failed to share screen to '%s': %s", toRole, err.Error()))
@@ -973,9 +988,9 @@ func usage() {
   panecom whoami                         Show current pane's role
   panecom resolve <role>                 Show pane ID for <role>
   panecom open [-d right|down] <role>    Open new pane and register as <role>
-  panecom dump [--full] <role>           Dump screen of <role>'s pane
+  panecom dump [--full] [-l N] <role>    Dump screen of <role>'s pane
   panecom send <role> <msg>              Send message to <role>'s pane
-  panecom share [--full] <role>           Share this pane's screen with <role>
+  panecom share [--full] [-l N] <role>    Share this pane's screen with <role>
   panecom exec [--timeout N] <role> <cmd> Run command on <role>, return output
   panecom profile [-f] <name>            Launch profile from .panecom/config.yaml
 `)
@@ -1026,11 +1041,19 @@ func main() {
 		cmdResolve(args[1])
 	case "dump":
 		full := false
+		lines := 0
 		role := ""
 		rest := args[1:]
 		for i := 0; i < len(rest); i++ {
 			if rest[i] == "--full" {
 				full = true
+			} else if (rest[i] == "-l" || rest[i] == "--lines") && i+1 < len(rest) {
+				n, err := strconv.Atoi(rest[i+1])
+				if err != nil || n <= 0 {
+					die("--lines requires a positive integer")
+				}
+				lines = n
+				i++
 			} else {
 				role = rest[i]
 			}
@@ -1038,7 +1061,7 @@ func main() {
 		if role == "" {
 			usage()
 		}
-		cmdDump(role, full)
+		cmdDump(role, full, lines)
 	case "send":
 		if len(args) < 3 {
 			usage()
@@ -1046,18 +1069,27 @@ func main() {
 		cmdSend(args[1], strings.Join(args[2:], " "))
 	case "share":
 		full := false
+		lines := 0
 		role := ""
-		for _, a := range args[1:] {
-			if a == "--full" {
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == "--full" {
 				full = true
+			} else if (rest[i] == "-l" || rest[i] == "--lines") && i+1 < len(rest) {
+				n, err := strconv.Atoi(rest[i+1])
+				if err != nil || n <= 0 {
+					die("--lines requires a positive integer")
+				}
+				lines = n
+				i++
 			} else {
-				role = a
+				role = rest[i]
 			}
 		}
 		if role == "" {
 			usage()
 		}
-		cmdShare(role, full)
+		cmdShare(role, full, lines)
 	case "exec":
 		rest := args[1:]
 		if len(rest) >= 1 && rest[0] == "--" {
