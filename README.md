@@ -36,11 +36,11 @@ go build -o bin/panecom .
 
 ビルドしたバイナリを PATH の通った場所にコピーしてください。
 
-### リリースバイナリ（初回リリース後）
+### リリースバイナリ
 
 リリースが公開されると、[Releases](https://github.com/konono/panecom/releases) ページからプラットフォームに合ったバイナリをダウンロードできます。
 
-### go install（初回リリース後）
+### go install
 
 ```bash
 go install github.com/konono/panecom@latest
