@@ -391,16 +391,153 @@ func TestVerifyFragment(t *testing.T) {
 	}
 }
 
-func TestContainsFragmentAtBottom(t *testing.T) {
+func TestFragmentAtInputEdge(t *testing.T) {
 	screen := "> please review the PR\n\n"
-	if !containsFragmentAtBottom(screen, "please review the PR") {
+	if !fragmentAtInputEdge(screen, "please review the PR") {
 		t.Error("expected fragment to be found in input line")
 	}
-	if containsFragmentAtBottom(screen, "") {
+	if fragmentAtInputEdge(screen, "") {
 		t.Error("empty fragment should never match")
 	}
 	deep := "> please review the PR\na\nb\nc\nd\n"
-	if containsFragmentAtBottom(deep, "please review the PR") {
+	if fragmentAtInputEdge(deep, "please review the PR") {
 		t.Error("fragment far above the bottom should not match")
+	}
+}
+
+// fakeMux serves a scripted sequence of screens so the send path can be
+// exercised without a real multiplexer.
+type fakeMux struct {
+	screens  []string
+	idx      int
+	sentText []string
+	enters   int
+}
+
+func (f *fakeMux) Kind() string                   { return "fake" }
+func (f *fakeMux) SessionName() (string, error)   { return "fake", nil }
+func (f *fakeMux) CurrentPaneID() (string, error) { return "p1", nil }
+func (f *fakeMux) ListPanes(string) ([]Pane, error) {
+	return []Pane{{ID: "p1"}}, nil
+}
+func (f *fakeMux) PaneExists(string, string) (bool, error) { return true, nil }
+func (f *fakeMux) NewPane(string, string, string) (string, error) {
+	return "p2", nil
+}
+func (f *fakeMux) NewTab(string, string) (string, string, error) { return "t1", "p2", nil }
+func (f *fakeMux) NewPaneInTab(string, string, string) (string, error) {
+	return "p2", nil
+}
+func (f *fakeMux) DumpPane(string, bool) (string, error) {
+	s := f.screens[f.idx]
+	if f.idx < len(f.screens)-1 {
+		f.idx++
+	}
+	return s, nil
+}
+func (f *fakeMux) SendKeys(_ string, text string) error {
+	f.sentText = append(f.sentText, text)
+	return nil
+}
+func (f *fakeMux) SendEnter(string) error          { f.enters++; return nil }
+func (f *fakeMux) RenamePane(string, string) error { return nil }
+func (f *fakeMux) FocusPane(string) error          { return nil }
+
+func withFakeMux(t *testing.T, f *fakeMux) {
+	t.Helper()
+	prev := mux
+	mux = f
+	t.Cleanup(func() { mux = prev })
+}
+
+func TestFragmentAtInputEdgeWrapped(t *testing.T) {
+	// The input line wrapped across two screen lines in a narrow pane.
+	screen := "> please review the\nPR before merging\n"
+	if !fragmentAtInputEdge(screen, "please review the PR before merging") {
+		t.Error("wrapped input line should still match the fragment")
+	}
+}
+
+func TestFragmentAtInputEdgeWrappedWithBoxDecoration(t *testing.T) {
+	screen := "│ > please review the │\n│ PR before merging    │\n"
+	if !fragmentAtInputEdge(screen, "please review the PR before merging") {
+		t.Error("wrapped input line inside a box should still match the fragment")
+	}
+}
+
+const wrappedMessage = "please review the PR before merging"
+
+// Narrow pane: the message wraps onto a second line and Enter never took.
+func TestSendAndVerifyWrappedNotSubmitted(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n> \n",
+		"earlier output\n> please review the\nPR before merging\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != exitSendNotSubmitted {
+		t.Errorf("expected exit %d for wrapped unsubmitted input, got %d (%s)",
+			exitSendNotSubmitted, code, reason)
+	}
+}
+
+// Same message, but the recipient accepted it: the input line is clear again.
+func TestSendAndVerifyWrappedSubmitted(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n> \n",
+		"earlier output\n● please review the\nPR before merging\n\nWorking…\n\n> \n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 for accepted message, got %d (%s)", code, reason)
+	}
+}
+
+func TestSendAndVerifyUnchangedScreen(t *testing.T) {
+	f := &fakeMux{screens: []string{"Showing detailed transcript\n"}}
+	withFakeMux(t, f)
+
+	code, _, _, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != exitSendUnconfirmed {
+		t.Errorf("expected exit %d when the screen never changes, got %d", exitSendUnconfirmed, code)
+	}
+}
+
+func TestSendAndVerifyDisabled(t *testing.T) {
+	f := &fakeMux{screens: []string{"anything\n"}}
+	withFakeMux(t, f)
+
+	code, _, _, err := sendAndVerify("reviewer", "p1", wrappedMessage, false, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 with verify disabled, got %d", code)
+	}
+	if len(f.sentText) != 1 || f.sentText[0] != wrappedMessage || f.enters != 1 {
+		t.Errorf("message should still be sent: %v enters=%d", f.sentText, f.enters)
+	}
+}
+
+// Known limitation: when the recipient's UI draws hints below the input line,
+// the residual message is no longer at the screen edge and exit 4 is not
+// raised. This errs toward not reporting a false failure; the operator still
+// sees the screen via exit 3 or a dump.
+func TestFragmentAtInputEdgeMissesResidualUnderFooterHint(t *testing.T) {
+	screen := "> please review the\nPR before merging\n? for shortcuts\n"
+	if fragmentAtInputEdge(screen, "please review the PR before merging") {
+		t.Error("documented limitation changed: residual under a footer hint now matches")
 	}
 }

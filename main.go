@@ -342,29 +342,73 @@ func verifyFragment(message string) string {
 	return string(r)
 }
 
-// containsFragmentAtBottom reports whether frag appears in the last few
-// non-empty lines of the screen, i.e. roughly where the input line lives.
-func containsFragmentAtBottom(screen, frag string) bool {
+// bottomDecoration are prompt and box-drawing characters that terminal UIs put
+// around the input line. They sit between the wrapped halves of a message and
+// must be ignored when looking for the message text.
+const bottomDecoration = "│┃|>❯›⟩"
+
+// squeezeForMatch removes whitespace and input-box decoration so that a message
+// split across several screen lines by wrapping still matches.
+func squeezeForMatch(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			continue
+		}
+		if strings.ContainsRune(bottomDecoration, r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// bottomVisibleLines is how many non-empty screen lines count as "the input
+// area". A wrapped message can occupy several lines in a narrow pane, so this
+// has to be more than one.
+const bottomVisibleLines = 6
+
+// fragmentAtInputEdge reports whether frag is the last thing on the screen,
+// i.e. still sitting unsent in the input line. The bottom lines are joined and
+// stripped of whitespace and box decoration first, so a message wrapped across
+// several lines in a narrow pane is still recognised.
+//
+// This deliberately requires the fragment to be at the very end rather than
+// merely present: once the recipient accepts the message, their UI echoes it
+// with a status line or a fresh prompt below it. Requiring the edge keeps an
+// accepted message from being misreported as undelivered, at the cost of
+// missing the residual in UIs that draw footer hints under the input line.
+func fragmentAtInputEdge(screen, frag string) bool {
 	if frag == "" {
 		return false
 	}
 	lines := strings.Split(normalizeScreen(screen), "\n")
-	checked := 0
-	for i := len(lines) - 1; i >= 0 && checked < 3; i-- {
+	bottom := []string{}
+	for i := len(lines) - 1; i >= 0 && len(bottom) < bottomVisibleLines; i-- {
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
 		}
-		checked++
-		if strings.Contains(lines[i], frag) {
-			return true
-		}
+		bottom = append([]string{lines[i]}, bottom...)
 	}
-	return false
+	return strings.HasSuffix(squeezeForMatch(strings.Join(bottom, "")), squeezeForMatch(frag))
 }
 
 func cmdSend(role, message string, verify bool, verifyTimeout float64) {
 	paneID := resolveRoleForCommand(role)
+	code, screen, reason, err := sendAndVerify(role, paneID, message, verify, verifyTimeout)
+	if err != nil {
+		die(fmt.Sprintf("failed to send message to '%s': %s", role, err.Error()))
+	}
+	if code != 0 {
+		sendFailure(role, screen, code, reason)
+	}
+}
 
+// sendAndVerify sends the message and, when verify is set, watches the
+// recipient's screen to decide whether it was accepted. It returns the exit
+// code to use (0 when delivery looks confirmed or could not be checked), the
+// last screen it saw and the reason for a non-zero code.
+func sendAndVerify(role, paneID, message string, verify bool, verifyTimeout float64) (int, string, string, error) {
 	before := ""
 	if verify {
 		screen, err := mux.DumpPane(paneID, false)
@@ -378,14 +422,14 @@ func cmdSend(role, message string, verify bool, verifyTimeout float64) {
 	}
 
 	if err := sendToPane(paneID, message); err != nil {
-		die(fmt.Sprintf("failed to send message to '%s': %s", role, err.Error()))
+		return 1, "", "", err
 	}
 	if !verify {
-		return
+		return 0, "", "", nil
 	}
 
 	frag := verifyFragment(message)
-	fragWasVisible := containsFragmentAtBottom(before, frag)
+	fragWasVisible := fragmentAtInputEdge(before, frag)
 
 	deadline := time.Now().Add(time.Duration(verifyTimeout * float64(time.Second)))
 	after := before
@@ -395,15 +439,15 @@ func cmdSend(role, message string, verify bool, verifyTimeout float64) {
 		screen, err := mux.DumpPane(paneID, false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "panecom: warning: cannot verify delivery to '%s': %s\n", role, err.Error())
-			return
+			return 0, "", "", nil
 		}
 		after = normalizeScreen(screen)
 		if after != before {
 			changed = true
 			// Once the screen moved, give the recipient a moment to consume the
 			// Enter before judging whether the text is still in the input line.
-			if !containsFragmentAtBottom(after, frag) {
-				return
+			if !fragmentAtInputEdge(after, frag) {
+				return 0, after, "", nil
 			}
 		}
 		if !time.Now().Before(deadline) {
@@ -412,14 +456,15 @@ func cmdSend(role, message string, verify bool, verifyTimeout float64) {
 	}
 
 	if !changed {
-		sendFailure(role, after, exitSendUnconfirmed,
-			"screen did not change after sending; the message was likely not accepted "+
-				"(the recipient may be in a non-input mode such as a detail view, pager or dialog)")
+		return exitSendUnconfirmed, after,
+			"screen did not change after sending; the message was likely not accepted " +
+				"(the recipient may be in a non-input mode such as a detail view, pager or dialog)", nil
 	}
-	if !fragWasVisible && containsFragmentAtBottom(after, frag) {
-		sendFailure(role, after, exitSendNotSubmitted,
-			"message text is still in the input line; Enter did not submit it")
+	if !fragWasVisible && fragmentAtInputEdge(after, frag) {
+		return exitSendNotSubmitted, after,
+			"message text is still in the input line; Enter did not submit it", nil
 	}
+	return 0, after, "", nil
 }
 
 func sendFailure(role, screen string, code int, msg string) {
