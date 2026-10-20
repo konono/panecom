@@ -363,29 +363,79 @@ func squeezeForMatch(s string) string {
 	return b.String()
 }
 
-// bottomVisibleLines is how many non-empty screen lines count as "the input
-// area". A wrapped message can occupy several lines in a narrow pane, so this
-// has to be more than one.
+// boxBorder are the characters that make up the frame drawn around an input
+// box. verticalBorder is the subset that runs down the sides, so a textless
+// line containing one is a row *inside* the box (an empty input line) rather
+// than the top or bottom edge of it.
+const (
+	boxBorder      = "─━│┃╭╮╰╯┌┐└┘├┤═║╔╗╚╝╠╣+-"
+	verticalBorder = "│┃║|"
+)
+
+// isHorizontalBorder reports whether a line is the top or bottom edge of a box
+// and therefore carries neither text nor an input line.
+func isHorizontalBorder(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	for _, r := range t {
+		if r != ' ' && !strings.ContainsRune(boxBorder, r) {
+			return false
+		}
+		if strings.ContainsRune(verticalBorder, r) {
+			return false
+		}
+	}
+	return true
+}
+
+// bottomVisibleLines is how many content lines count as "the input area". A
+// wrapped message can occupy several lines in a narrow pane, so this has to be
+// more than one.
 const bottomVisibleLines = 6
 
-// fragmentAtInputEdge reports whether frag is the last thing on the screen,
-// i.e. still sitting unsent in the input line. The bottom lines are joined and
-// stripped of whitespace and box decoration first, so a message wrapped across
+// fragmentAtInputEdge reports whether frag is still sitting unsent in the
+// recipient's input line. The bottom lines are joined and stripped of
+// whitespace and box decoration before matching, so a message wrapped across
 // several lines in a narrow pane is still recognised.
 //
-// This deliberately requires the fragment to be at the very end rather than
-// merely present: once the recipient accepts the message, their UI echoes it
-// with a status line or a fresh prompt below it. Requiring the edge keeps an
-// accepted message from being misreported as undelivered, at the cost of
-// missing the residual in UIs that draw footer hints under the input line.
+// Two rules keep an already-accepted message from being misreported:
+//
+//   - An empty input line (a bare prompt, with or without a box around it)
+//     means nothing is pending, whatever is echoed above it.
+//   - Otherwise the fragment must sit at the very end of the input area, not
+//     merely appear somewhere in it: an accepted message is echoed with a
+//     status line or a fresh prompt below it.
+//
+// The cost is missing the residual in UIs that draw footer hints under the
+// input line. That direction is deliberate: a false "not delivered" would make
+// the sender repeat a message the recipient already has.
 func fragmentAtInputEdge(screen, frag string) bool {
 	if frag == "" {
 		return false
 	}
 	lines := strings.Split(normalizeScreen(screen), "\n")
+
+	// Walk up past blank lines and the bottom edge of an input box.
+	i := len(lines) - 1
+	for ; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) == "" || isHorizontalBorder(lines[i]) {
+			continue
+		}
+		break
+	}
+	if i < 0 {
+		return false
+	}
+	// The input line holds no text: the message was consumed.
+	if squeezeForMatch(lines[i]) == "" {
+		return false
+	}
+
 	bottom := []string{}
-	for i := len(lines) - 1; i >= 0 && len(bottom) < bottomVisibleLines; i-- {
-		if strings.TrimSpace(lines[i]) == "" {
+	for ; i >= 0 && len(bottom) < bottomVisibleLines; i-- {
+		if strings.TrimSpace(lines[i]) == "" || isHorizontalBorder(lines[i]) {
 			continue
 		}
 		bottom = append([]string{lines[i]}, bottom...)

@@ -541,3 +541,91 @@ func TestFragmentAtInputEdgeMissesResidualUnderFooterHint(t *testing.T) {
 		t.Error("documented limitation changed: residual under a footer hint now matches")
 	}
 }
+
+// An accepted message is echoed in the transcript with an empty prompt below
+// it. The prompt characters normalize away, so the input line must be
+// recognised as empty rather than treated as the end of the echo.
+func TestSendAndVerifyWrappedSubmittedEmptyPrompt(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n> \n",
+		"earlier output\n● please review the\nPR before merging\n\n> \n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 when the input line is an empty prompt, got %d (%s)", code, reason)
+	}
+}
+
+// Same, with the prompt drawn inside a box: the bottom border must not be
+// mistaken for the input line.
+func TestSendAndVerifyWrappedSubmittedEmptyPromptInBox(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n╭────────────╮\n│ >          │\n╰────────────╯\n",
+		"earlier output\n● please review the\nPR before merging\n╭────────────╮\n│ >          │\n╰────────────╯\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 for an empty boxed prompt, got %d (%s)", code, reason)
+	}
+}
+
+// Residual text inside a boxed input line is still detected.
+func TestSendAndVerifyWrappedNotSubmittedInBox(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n╭────────────╮\n│ >          │\n╰────────────╯\n",
+		"earlier output\n╭────────────╮\n│ > please review the │\n│ PR before merging   │\n╰────────────╯\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != exitSendNotSubmitted {
+		t.Errorf("expected exit %d for residual text in a boxed input line, got %d (%s)",
+			exitSendNotSubmitted, code, reason)
+	}
+}
+
+func TestIsHorizontalBorder(t *testing.T) {
+	for _, l := range []string{"╭────────────╮", "╰──╯", "+------+", "═══"} {
+		if !isHorizontalBorder(l) {
+			t.Errorf("expected %q to be a horizontal border", l)
+		}
+	}
+	// A textless line with side borders is an empty input row, not an edge:
+	// skipping it would let the echoed message above be read as the input.
+	for _, l := range []string{"", "│   │", "│ > hello │", "? for shortcuts"} {
+		if isHorizontalBorder(l) {
+			t.Errorf("expected %q not to be a horizontal border", l)
+		}
+	}
+}
+
+// An empty boxed input line without a prompt character must still count as
+// empty rather than being skipped as framing.
+func TestSendAndVerifySubmittedEmptyBoxedLineWithoutPrompt(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n╭────────────╮\n│            │\n╰────────────╯\n",
+		"earlier output\n● please review the\nPR before merging\n╭────────────╮\n│            │\n╰────────────╯\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 for an empty boxed input line, got %d (%s)", code, reason)
+	}
+}
