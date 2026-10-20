@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/konono/panecom/compare/v0.3.0...v0.4.0) (2026-10-20)
+
+
+### Features
+
+* **send:** verify delivery and surface recipient state via exit codes ([43c9e54](https://github.com/konono/panecom/commit/43c9e5449048b6001324cbe7248546f87a4b3ba6))
+* **send:** verify delivery and surface recipient state via exit codes ([fc1f11a](https://github.com/konono/panecom/commit/fc1f11abc433b2236fefa89ab4d9aea0af62d7c7))
+
+
+### Bug Fixes
+
+* **send:** detect unsent input that wraps across screen lines ([44682de](https://github.com/konono/panecom/commit/44682de359e3fbc172dc4c3f4e503320b8f9cae2))
+* **send:** treat an empty input line as delivered ([4e8c43f](https://github.com/konono/panecom/commit/4e8c43f6440c041b1dc53c9403e5b4405a28bf80))
+
 ## [0.3.0](https://github.com/konono/panecom/compare/v0.2.0...v0.3.0) (2026-09-29)
 
 
