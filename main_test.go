@@ -367,3 +367,265 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeScreen(t *testing.T) {
+	got := normalizeScreen("a  \nb\t\n\n")
+	if got != "a\nb" {
+		t.Errorf("unexpected normalized screen: %q", got)
+	}
+}
+
+func TestVerifyFragment(t *testing.T) {
+	if f := verifyFragment("short"); f != "" {
+		t.Errorf("short message should have no fragment, got %q", f)
+	}
+	if f := verifyFragment("please review the PR"); f != "please review the PR" {
+		t.Errorf("unexpected fragment: %q", f)
+	}
+	if f := verifyFragment("first line\nsecond line is the marker\n"); f != "second line is the marker" {
+		t.Errorf("should use last non-empty line, got %q", f)
+	}
+	long := strings.Repeat("x", 100)
+	if f := verifyFragment(long); len([]rune(f)) != 40 {
+		t.Errorf("fragment should be capped at 40 runes, got %d", len([]rune(f)))
+	}
+}
+
+func TestFragmentAtInputEdge(t *testing.T) {
+	screen := "> please review the PR\n\n"
+	if !fragmentAtInputEdge(screen, "please review the PR") {
+		t.Error("expected fragment to be found in input line")
+	}
+	if fragmentAtInputEdge(screen, "") {
+		t.Error("empty fragment should never match")
+	}
+	deep := "> please review the PR\na\nb\nc\nd\n"
+	if fragmentAtInputEdge(deep, "please review the PR") {
+		t.Error("fragment far above the bottom should not match")
+	}
+}
+
+// fakeMux serves a scripted sequence of screens so the send path can be
+// exercised without a real multiplexer.
+type fakeMux struct {
+	screens  []string
+	idx      int
+	sentText []string
+	enters   int
+}
+
+func (f *fakeMux) Kind() string                   { return "fake" }
+func (f *fakeMux) SessionName() (string, error)   { return "fake", nil }
+func (f *fakeMux) CurrentPaneID() (string, error) { return "p1", nil }
+func (f *fakeMux) ListPanes(string) ([]Pane, error) {
+	return []Pane{{ID: "p1"}}, nil
+}
+func (f *fakeMux) PaneExists(string, string) (bool, error) { return true, nil }
+func (f *fakeMux) NewPane(string, string, string) (string, error) {
+	return "p2", nil
+}
+func (f *fakeMux) NewTab(string, string) (string, string, error) { return "t1", "p2", nil }
+func (f *fakeMux) NewPaneInTab(string, string, string) (string, error) {
+	return "p2", nil
+}
+func (f *fakeMux) DumpPane(string, bool) (string, error) {
+	s := f.screens[f.idx]
+	if f.idx < len(f.screens)-1 {
+		f.idx++
+	}
+	return s, nil
+}
+func (f *fakeMux) SendKeys(_ string, text string) error {
+	f.sentText = append(f.sentText, text)
+	return nil
+}
+func (f *fakeMux) SendEnter(string) error          { f.enters++; return nil }
+func (f *fakeMux) RenamePane(string, string) error { return nil }
+func (f *fakeMux) FocusPane(string) error          { return nil }
+
+func withFakeMux(t *testing.T, f *fakeMux) {
+	t.Helper()
+	prev := mux
+	mux = f
+	t.Cleanup(func() { mux = prev })
+}
+
+func TestFragmentAtInputEdgeWrapped(t *testing.T) {
+	// The input line wrapped across two screen lines in a narrow pane.
+	screen := "> please review the\nPR before merging\n"
+	if !fragmentAtInputEdge(screen, "please review the PR before merging") {
+		t.Error("wrapped input line should still match the fragment")
+	}
+}
+
+func TestFragmentAtInputEdgeWrappedWithBoxDecoration(t *testing.T) {
+	screen := "│ > please review the │\n│ PR before merging    │\n"
+	if !fragmentAtInputEdge(screen, "please review the PR before merging") {
+		t.Error("wrapped input line inside a box should still match the fragment")
+	}
+}
+
+const wrappedMessage = "please review the PR before merging"
+
+// Narrow pane: the message wraps onto a second line and Enter never took.
+func TestSendAndVerifyWrappedNotSubmitted(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n> \n",
+		"earlier output\n> please review the\nPR before merging\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != exitSendNotSubmitted {
+		t.Errorf("expected exit %d for wrapped unsubmitted input, got %d (%s)",
+			exitSendNotSubmitted, code, reason)
+	}
+}
+
+// Same message, but the recipient accepted it: the input line is clear again.
+func TestSendAndVerifyWrappedSubmitted(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n> \n",
+		"earlier output\n● please review the\nPR before merging\n\nWorking…\n\n> \n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 for accepted message, got %d (%s)", code, reason)
+	}
+}
+
+func TestSendAndVerifyUnchangedScreen(t *testing.T) {
+	f := &fakeMux{screens: []string{"Showing detailed transcript\n"}}
+	withFakeMux(t, f)
+
+	code, _, _, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != exitSendUnconfirmed {
+		t.Errorf("expected exit %d when the screen never changes, got %d", exitSendUnconfirmed, code)
+	}
+}
+
+func TestSendAndVerifyDisabled(t *testing.T) {
+	f := &fakeMux{screens: []string{"anything\n"}}
+	withFakeMux(t, f)
+
+	code, _, _, err := sendAndVerify("reviewer", "p1", wrappedMessage, false, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 with verify disabled, got %d", code)
+	}
+	if len(f.sentText) != 1 || f.sentText[0] != wrappedMessage || f.enters != 1 {
+		t.Errorf("message should still be sent: %v enters=%d", f.sentText, f.enters)
+	}
+}
+
+// Known limitation: when the recipient's UI draws hints below the input line,
+// the residual message is no longer at the screen edge and exit 4 is not
+// raised. This errs toward not reporting a false failure; the operator still
+// sees the screen via exit 3 or a dump.
+func TestFragmentAtInputEdgeMissesResidualUnderFooterHint(t *testing.T) {
+	screen := "> please review the\nPR before merging\n? for shortcuts\n"
+	if fragmentAtInputEdge(screen, "please review the PR before merging") {
+		t.Error("documented limitation changed: residual under a footer hint now matches")
+	}
+}
+
+// An accepted message is echoed in the transcript with an empty prompt below
+// it. The prompt characters normalize away, so the input line must be
+// recognised as empty rather than treated as the end of the echo.
+func TestSendAndVerifyWrappedSubmittedEmptyPrompt(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n> \n",
+		"earlier output\n● please review the\nPR before merging\n\n> \n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 when the input line is an empty prompt, got %d (%s)", code, reason)
+	}
+}
+
+// Same, with the prompt drawn inside a box: the bottom border must not be
+// mistaken for the input line.
+func TestSendAndVerifyWrappedSubmittedEmptyPromptInBox(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n╭────────────╮\n│ >          │\n╰────────────╯\n",
+		"earlier output\n● please review the\nPR before merging\n╭────────────╮\n│ >          │\n╰────────────╯\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 for an empty boxed prompt, got %d (%s)", code, reason)
+	}
+}
+
+// Residual text inside a boxed input line is still detected.
+func TestSendAndVerifyWrappedNotSubmittedInBox(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n╭────────────╮\n│ >          │\n╰────────────╯\n",
+		"earlier output\n╭────────────╮\n│ > please review the │\n│ PR before merging   │\n╰────────────╯\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != exitSendNotSubmitted {
+		t.Errorf("expected exit %d for residual text in a boxed input line, got %d (%s)",
+			exitSendNotSubmitted, code, reason)
+	}
+}
+
+func TestIsHorizontalBorder(t *testing.T) {
+	for _, l := range []string{"╭────────────╮", "╰──╯", "+------+", "═══"} {
+		if !isHorizontalBorder(l) {
+			t.Errorf("expected %q to be a horizontal border", l)
+		}
+	}
+	// A textless line with side borders is an empty input row, not an edge:
+	// skipping it would let the echoed message above be read as the input.
+	for _, l := range []string{"", "│   │", "│ > hello │", "? for shortcuts"} {
+		if isHorizontalBorder(l) {
+			t.Errorf("expected %q not to be a horizontal border", l)
+		}
+	}
+}
+
+// An empty boxed input line without a prompt character must still count as
+// empty rather than being skipped as framing.
+func TestSendAndVerifySubmittedEmptyBoxedLineWithoutPrompt(t *testing.T) {
+	f := &fakeMux{screens: []string{
+		"earlier output\n╭────────────╮\n│            │\n╰────────────╯\n",
+		"earlier output\n● please review the\nPR before merging\n╭────────────╮\n│            │\n╰────────────╯\n",
+	}}
+	withFakeMux(t, f)
+
+	code, _, reason, err := sendAndVerify("reviewer", "p1", wrappedMessage, true, 0.3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit 0 for an empty boxed input line, got %d (%s)", code, reason)
+	}
+}
