@@ -367,3 +367,40 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeScreen(t *testing.T) {
+	got := normalizeScreen("a  \nb\t\n\n")
+	if got != "a\nb" {
+		t.Errorf("unexpected normalized screen: %q", got)
+	}
+}
+
+func TestVerifyFragment(t *testing.T) {
+	if f := verifyFragment("short"); f != "" {
+		t.Errorf("short message should have no fragment, got %q", f)
+	}
+	if f := verifyFragment("please review the PR"); f != "please review the PR" {
+		t.Errorf("unexpected fragment: %q", f)
+	}
+	if f := verifyFragment("first line\nsecond line is the marker\n"); f != "second line is the marker" {
+		t.Errorf("should use last non-empty line, got %q", f)
+	}
+	long := strings.Repeat("x", 100)
+	if f := verifyFragment(long); len([]rune(f)) != 40 {
+		t.Errorf("fragment should be capped at 40 runes, got %d", len([]rune(f)))
+	}
+}
+
+func TestContainsFragmentAtBottom(t *testing.T) {
+	screen := "> please review the PR\n\n"
+	if !containsFragmentAtBottom(screen, "please review the PR") {
+		t.Error("expected fragment to be found in input line")
+	}
+	if containsFragmentAtBottom(screen, "") {
+		t.Error("empty fragment should never match")
+	}
+	deep := "> please review the PR\na\nb\nc\nd\n"
+	if containsFragmentAtBottom(deep, "please review the PR") {
+		t.Error("fragment far above the bottom should not match")
+	}
+}
