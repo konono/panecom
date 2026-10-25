@@ -73,6 +73,277 @@ func TestNamespaceDir(t *testing.T) {
 	}
 }
 
+func inDir(t *testing.T, dir string, fn func()) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+	fn()
+}
+
+func anchorFrom(t *testing.T, dir string) string {
+	t.Helper()
+	var anchor string
+	inDir(t, dir, func() { anchor = namespaceAnchor() })
+	return anchor
+}
+
+func resolvedPath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestNamespaceAnchorWalksUpToGitRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(home, "proj")
+	sub := filepath.Join(repo, "a", "b")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	want := resolvedPath(t, repo)
+	if got := anchorFrom(t, sub); got != want {
+		t.Errorf("anchor from subdir = %s, want %s", got, want)
+	}
+	if got := anchorFrom(t, repo); got != want {
+		t.Errorf("anchor from repo root = %s, want %s", got, want)
+	}
+}
+
+func TestNamespaceAnchorAcceptsGitFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(home, "worktree")
+	sub := filepath.Join(repo, "sub")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Worktrees and submodules carry a .git file instead of a directory.
+	if err := os.WriteFile(filepath.Join(repo, ".git"), []byte("gitdir: /elsewhere\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := anchorFrom(t, sub), resolvedPath(t, repo); got != want {
+		t.Errorf("anchor = %s, want %s", got, want)
+	}
+}
+
+func TestNamespaceAnchorFallsBackToPanecomDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	proj := filepath.Join(home, "proj")
+	sub := filepath.Join(proj, "deep", "deeper")
+	if err := os.MkdirAll(filepath.Join(proj, ".panecom"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := anchorFrom(t, sub), resolvedPath(t, proj); got != want {
+		t.Errorf("anchor = %s, want %s", got, want)
+	}
+}
+
+func TestNamespaceAnchorNeverAnchorsAtHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// A catch-all ~/.panecom is a shared state store, not a project root.
+	if err := os.MkdirAll(filepath.Join(home, ".panecom"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(home, "a")
+	b := filepath.Join(home, "b")
+	for _, d := range []string{a, b} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	anchorA := anchorFrom(t, a)
+	anchorB := anchorFrom(t, b)
+	if anchorA != resolvedPath(t, a) {
+		t.Errorf("anchor = %s, want the directory itself %s", anchorA, resolvedPath(t, a))
+	}
+	if anchorA == anchorB {
+		t.Errorf("unrelated directories under home collapsed into one anchor: %s", anchorA)
+	}
+	if anchorA == resolvedPath(t, home) {
+		t.Error("home directory must not be used as a namespace anchor")
+	}
+}
+
+func TestNamespaceAnchorKeepsNestedRepoSeparate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	outer := filepath.Join(home, "outer")
+	inner := filepath.Join(outer, "vendor", "inner")
+	if err := os.MkdirAll(filepath.Join(outer, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(inner, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := anchorFrom(t, inner), resolvedPath(t, inner); got != want {
+		t.Errorf("nested repo anchor = %s, want %s", got, want)
+	}
+	if anchorFrom(t, inner) == anchorFrom(t, outer) {
+		t.Error("nested repo should keep its own namespace")
+	}
+}
+
+func TestNamespaceAnchorPrefersGitRootOverDeeperPanecom(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := filepath.Join(home, "repo")
+	sub := filepath.Join(repo, "sub")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// A stale store left in a subdirectory by an older panecom.
+	if err := os.MkdirAll(filepath.Join(sub, ".panecom"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	want := resolvedPath(t, repo)
+	if got := anchorFrom(t, sub); got != want {
+		t.Errorf("anchor from sub = %s, want the git root %s", got, want)
+	}
+	if got := anchorFrom(t, repo); got != want {
+		t.Errorf("anchor from repo = %s, want %s", got, want)
+	}
+}
+
+func TestNamespaceAnchorWithoutKnownHomeIgnoresPanecomMarker(t *testing.T) {
+	root := t.TempDir()
+	// Stands in for a catch-all ~/.panecom that must not capture the anchor.
+	if err := os.MkdirAll(filepath.Join(root, ".panecom"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(root, "a")
+	b := filepath.Join(root, "b")
+	for _, d := range []string{a, b} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	anchorA := namespaceAnchorFrom(a, "")
+	anchorB := namespaceAnchorFrom(b, "")
+	if anchorA != a {
+		t.Errorf("anchor = %s, want the directory itself %s", anchorA, a)
+	}
+	if anchorA == anchorB {
+		t.Errorf("unknown home collapsed unrelated directories into %s", anchorA)
+	}
+	// A git root is still a safe anchor without a home boundary.
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(repo, "x", "y")
+	if err := os.MkdirAll(deep, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got := namespaceAnchorFrom(deep, ""); got != repo {
+		t.Errorf("anchor = %s, want %s", got, repo)
+	}
+}
+
+func TestRegisterAndResolveAcrossRepoSubdir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PANECOM_STATE_DIR", "")
+	repo := filepath.Join(home, "repo")
+	sub := filepath.Join(repo, "sub")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".panecom"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// A stale store in the subdirectory must not split the project.
+	if err := os.MkdirAll(filepath.Join(sub, ".panecom"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeMux{}
+	withFakeMux(t, f)
+
+	inDir(t, repo, func() {
+		f.pane = "p_repo"
+		cmdRegister("r")
+	})
+	inDir(t, sub, func() {
+		f.pane = "p_sub"
+		cmdRegister("d")
+	})
+
+	// Both panes must land in one store and one namespace.
+	var repoNs, subNs, sRoot string
+	inDir(t, repo, func() {
+		_, sRoot = requireSession()
+		ns, err := namespaceForCurrentPane(sRoot, "p_repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		repoNs = ns
+	})
+	inDir(t, sub, func() {
+		_, subRoot := requireSession()
+		if subRoot != sRoot {
+			t.Errorf("state root differs between repo (%s) and sub (%s)", sRoot, subRoot)
+		}
+		ns, err := namespaceForCurrentPane(subRoot, "p_sub")
+		if err != nil {
+			t.Fatal(err)
+		}
+		subNs = ns
+	})
+	if repoNs != subNs {
+		t.Fatalf("namespace split: repo=%s sub=%s", repoNs, subNs)
+	}
+
+	// Each pane resolves the other's role.
+	if got, err := resolveRole(repoNs, "d"); err != nil || got != "p_sub" {
+		t.Errorf("resolve d = %q, %v; want p_sub", got, err)
+	}
+	if got, err := resolveRole(subNs, "r"); err != nil || got != "p_repo" {
+		t.Errorf("resolve r = %q, %v; want p_repo", got, err)
+	}
+}
+
+func TestDescribeNamespaceReportsRegisteredAnchor(t *testing.T) {
+	nsDir := t.TempDir()
+	if err := atomicWrite(filepath.Join(nsDir, ".cwd"), "/work/project"); err != nil {
+		t.Fatal(err)
+	}
+	// The pane was registered under /work/project; the process has since
+	// moved elsewhere, so the recorded anchor is what must be reported.
+	if got := describeNamespace(nsDir); got != "/work/project" {
+		t.Errorf("describeNamespace = %s, want /work/project", got)
+	}
+
+	empty := t.TempDir()
+	if got := describeNamespace(empty); got != empty {
+		t.Errorf("describeNamespace = %s, want the namespace path %s", got, empty)
+	}
+}
+
 func TestStateRootEnvOverride(t *testing.T) {
 	t.Setenv("PANECOM_STATE_DIR", "/custom/state/dir")
 	root := stateRoot()
@@ -412,11 +683,17 @@ type fakeMux struct {
 	idx      int
 	sentText []string
 	enters   int
+	pane     string
 }
 
-func (f *fakeMux) Kind() string                   { return "fake" }
-func (f *fakeMux) SessionName() (string, error)   { return "fake", nil }
-func (f *fakeMux) CurrentPaneID() (string, error) { return "p1", nil }
+func (f *fakeMux) Kind() string                 { return "fake" }
+func (f *fakeMux) SessionName() (string, error) { return "fake", nil }
+func (f *fakeMux) CurrentPaneID() (string, error) {
+	if f.pane != "" {
+		return f.pane, nil
+	}
+	return "p1", nil
+}
 func (f *fakeMux) ListPanes(string) ([]Pane, error) {
 	return []Pane{{ID: "p1"}}, nil
 }

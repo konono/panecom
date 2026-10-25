@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -33,9 +34,12 @@ func stateRoot() string {
 	if dir := os.Getenv("PANECOM_STATE_DIR"); dir != "" {
 		return dir
 	}
-	cwd := canonicalCwd()
-	dir := cwd
-	for {
+	// Start at the project root so that every pane of one project reaches the
+	// same store. Searching from the working directory instead would let a
+	// stale .panecom in a subdirectory shadow the project's own store, which
+	// splits the project across two state roots.
+	anchor := namespaceAnchor()
+	for dir := anchor; ; {
 		candidate := filepath.Join(dir, ".panecom")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate
@@ -46,7 +50,7 @@ func stateRoot() string {
 		}
 		dir = parent
 	}
-	return filepath.Join(cwd, ".panecom")
+	return filepath.Join(anchor, ".panecom")
 }
 
 func sessionRoot(muxKind, sessionName string) string {
@@ -69,6 +73,79 @@ func canonicalCwd() string {
 		abs = cwd
 	}
 	return abs
+}
+
+// canonicalHome returns the resolved home directory, or "" when it cannot be
+// determined. Callers must treat "" as "unknown" and stay on the safe side
+// rather than assuming no boundary exists.
+func canonicalHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		if u, uerr := user.Current(); uerr == nil {
+			home = u.HomeDir
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	if abs, err := filepath.EvalSymlinks(home); err == nil {
+		return abs
+	}
+	return home
+}
+
+// findMarkerUpward walks from dir towards the filesystem root and returns the
+// first directory holding marker. It stops before stopAt (exclusive) and before
+// the filesystem root; "" means no match.
+func findMarkerUpward(start, marker, stopAt string) string {
+	for dir := start; ; {
+		parent := filepath.Dir(dir)
+		if dir == stopAt || parent == dir {
+			return ""
+		}
+		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			return dir
+		}
+		dir = parent
+	}
+}
+
+// namespaceAnchor returns the directory that identifies the namespace of the
+// current pane. It walks up from the working directory looking for a project
+// root, so the namespace stays the same no matter where inside the project the
+// working directory has drifted to.
+//
+// A Git root always wins over a .panecom directory, and the search for it
+// covers the whole chain before .panecom is considered. Otherwise a stale
+// .panecom left in a subdirectory by an older panecom would split one
+// repository into two namespaces.
+//
+// The home directory and the filesystem root are never treated as project
+// roots: a catch-all ~/.panecom is a shared state store, not a project, and
+// anchoring there would merge unrelated projects into one namespace. When no
+// project root is found the working directory itself is the anchor, which is
+// the behaviour panecom had before anchoring existed.
+func namespaceAnchor() string {
+	return namespaceAnchorFrom(canonicalCwd(), canonicalHome())
+}
+
+// namespaceAnchorFrom is the pure form of namespaceAnchor. An empty home means
+// the boundary is unknown.
+func namespaceAnchorFrom(cwd, home string) string {
+	// .git is a directory in a normal clone and a file in a worktree or
+	// submodule; both mark a project root.
+	if root := findMarkerUpward(cwd, ".git", home); root != "" {
+		return root
+	}
+	if home == "" {
+		// Without a home boundary a .panecom search could climb into a
+		// catch-all store and merge unrelated projects, so don't run it.
+		return cwd
+	}
+	if root := findMarkerUpward(cwd, ".panecom", home); root != "" {
+		return root
+	}
+	return cwd
 }
 
 func validateRole(role string) {
@@ -96,17 +173,28 @@ func readFile(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func namespaceDir(sRoot, cwd string) string {
-	return filepath.Join(sRoot, "namespaces", hashString(cwd))
+func namespaceDir(sRoot, anchor string) string {
+	return filepath.Join(sRoot, "namespaces", hashString(anchor))
 }
 
 func namespaceForCurrentPane(sRoot, paneID string) (string, error) {
 	path := filepath.Join(sRoot, "panes", paneID)
-	cwdHash, err := readFile(path)
+	anchorHash, err := readFile(path)
 	if err != nil {
 		return "", fmt.Errorf("pane '%s' is not registered", paneID)
 	}
-	return filepath.Join(sRoot, "namespaces", cwdHash), nil
+	return filepath.Join(sRoot, "namespaces", anchorHash), nil
+}
+
+// describeNamespace names the namespace that was actually searched. The anchor
+// recorded at register time is authoritative: recomputing it from the current
+// working directory would report the wrong namespace in exactly the case worth
+// diagnosing, where the pane was registered elsewhere and the directory moved.
+func describeNamespace(nsDir string) string {
+	if anchor, err := readFile(filepath.Join(nsDir, ".cwd")); err == nil && anchor != "" {
+		return anchor
+	}
+	return nsDir
 }
 
 func resolveRole(nsDir, role string) (string, error) {
@@ -154,14 +242,14 @@ func cmdRegister(role string) {
 	validateRole(role)
 	session, sRoot := requireSession()
 	paneID := requirePaneID()
-	cwd := canonicalCwd()
-	cwdHash := hashString(cwd)
-	nsDir := namespaceDir(sRoot, cwd)
+	anchor := namespaceAnchor()
+	anchorHash := hashString(anchor)
+	nsDir := namespaceDir(sRoot, anchor)
 
 	if err := atomicWrite(filepath.Join(sRoot, ".session"), session); err != nil {
 		die("failed to write session state: " + err.Error())
 	}
-	if err := atomicWrite(filepath.Join(nsDir, ".cwd"), cwd); err != nil {
+	if err := atomicWrite(filepath.Join(nsDir, ".cwd"), anchor); err != nil {
 		die("failed to write namespace state: " + err.Error())
 	}
 
@@ -185,7 +273,7 @@ func cmdRegister(role string) {
 	if err := atomicWrite(filepath.Join(nsDir, "roles", role), paneID); err != nil {
 		die("failed to write role: " + err.Error())
 	}
-	if err := atomicWrite(filepath.Join(sRoot, "panes", paneID), cwdHash); err != nil {
+	if err := atomicWrite(filepath.Join(sRoot, "panes", paneID), anchorHash); err != nil {
 		die("failed to write pane mapping: " + err.Error())
 	}
 
@@ -251,17 +339,15 @@ func resolveRoleForCommand(role string) string {
 		var err error
 		nsDir, err = namespaceForCurrentPane(sRoot, paneID)
 		if err != nil {
-			cwd := canonicalCwd()
-			nsDir = namespaceDir(sRoot, cwd)
+			nsDir = namespaceDir(sRoot, namespaceAnchor())
 		}
 	} else {
-		cwd := canonicalCwd()
-		nsDir = namespaceDir(sRoot, cwd)
+		nsDir = namespaceDir(sRoot, namespaceAnchor())
 	}
 
 	targetPaneID, err := resolveRole(nsDir, role)
 	if err != nil {
-		die(fmt.Sprintf("role '%s' is not registered in this namespace", role))
+		die(fmt.Sprintf("role '%s' is not registered in namespace %s", role, describeNamespace(nsDir)))
 	}
 
 	exists, err := mux.PaneExists(session, targetPaneID)

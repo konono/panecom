@@ -77,7 +77,7 @@ panecom register reviewer
 codex  # または claude 等
 ```
 
-> 両方の pane は **同じセッション内**、**同じディレクトリ** から register してください。これが同じ namespace に所属する条件です。
+> 両方の pane は **同じセッション内**、**同じプロジェクト** から register してください。これが同じ namespace に所属する条件です。プロジェクトは register 時の作業ディレクトリから遡って判定されるので、リポジトリ内のどのディレクトリで register しても構いません。
 
 4. 通信する:
 
@@ -112,7 +112,7 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | `not running inside a supported multiplexer` | Zellij/tmux 外で実行 | マルチプレクサのセッション内で実行する |
 | `unsupported multiplexer: X` | 未対応の `--mux` 値 | `zellij` または `tmux` を指定 |
 | `ZELLIJ_PANE_ID not set` / `TMUX_PANE not set` | pane ID が取得できない | マルチプレクサの terminal pane 内で実行する |
-| `role 'X' is not registered` | 相手が未登録 or 別 namespace | 同じディレクトリから register する |
+| `role 'X' is not registered in namespace <path>` | 相手が未登録 or 別 namespace | メッセージの `<path>` が相手の register 先と一致するか確認し、同じプロジェクトから register し直す |
 | `role 'X' points to stale pane` | 相手の pane が閉じられた | 相手側で再度 `panecom register X` |
 
 ## コマンド一覧
@@ -262,15 +262,29 @@ reviewer  ─────→ pane_5
 
 ### Namespace
 
-role はセッション + register 時の作業ディレクトリで namespace が決まります。異なるプロジェクトの role は互いに干渉しません。
+role はセッション + **プロジェクトルート**で namespace が決まります。異なるプロジェクトの role は互いに干渉しません。
+
+プロジェクトルート（anchor）は register 時の作業ディレクトリから親を遡って決定されます:
+
+1. 最初に見つかった `.git`（通常の clone はディレクトリ、worktree / submodule はファイル）
+2. `.git` が無ければ、最初に見つかった `.panecom/`
+3. いずれも無ければ作業ディレクトリ自身
+
+`.git` を全階層で優先するため、サブディレクトリに `.panecom/` が残っていても同一リポジトリが分裂しません。また**ホームディレクトリとファイルシステムルートは project root として扱いません** — catch-all の `~/.panecom` は共有の状態置き場であってプロジェクトではなく、そこを anchor にすると無関係なプロジェクトが 1 つの namespace に合流するためです。
+
+この仕組みにより、register 後に作業ディレクトリがリポジトリ内で移動しても namespace は変わりません。
+
+> **v0.3.0 からの変更**: 以前は作業ディレクトリそのものが namespace を決めていました。アップグレード後は namespace のハッシュが変わります。登録済みの pane は `panes/<id>` に namespace を直接記録しているため解決は維持されますが、**アップグレード前に登録した pane と新しく登録した pane を相互に見せるには、古い側で `panecom register` をやり直してください**。
 
 ### State
 
 状態ディレクトリは以下の優先順で決定されます:
 
 1. `PANECOM_STATE_DIR` 環境変数（設定されていれば最優先）
-2. cwd から親ディレクトリを遡って見つかった既存の `.panecom/`
-3. いずれもなければ `cwd/.panecom/` を新規作成
+2. 上記の anchor から親ディレクトリを遡って見つかった既存の `.panecom/`
+3. いずれもなければ `<anchor>/.panecom/` を新規作成
+
+探索を cwd ではなく anchor から始めるため、サブディレクトリに残った `.panecom/` がプロジェクト本来の状態ディレクトリを隠すことはありません。
 
 ```
 .panecom/
