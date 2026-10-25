@@ -344,6 +344,313 @@ func TestDescribeNamespaceReportsRegisteredAnchor(t *testing.T) {
 	}
 }
 
+func TestSplitQualifiedRole(t *testing.T) {
+	cases := []struct{ in, alias, role string }{
+		{"r", "", "r"},
+		{"mcp/reviewer", "mcp", "reviewer"},
+		{"a/b/c", "a/b", "c"},
+		{"/r", "", "r"},
+	}
+	for _, c := range cases {
+		alias, role := splitQualifiedRole(c.in)
+		if alias != c.alias || role != c.role {
+			t.Errorf("split(%q) = (%q, %q), want (%q, %q)", c.in, alias, role, c.alias, c.role)
+		}
+	}
+}
+
+func TestExpandPathFrom(t *testing.T) {
+	base := t.TempDir()
+	sub := filepath.Join(base, "sub")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := expandPathFrom(base, "sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != resolvedPath(t, sub) {
+		t.Errorf("expandPathFrom = %s, want %s", got, resolvedPath(t, sub))
+	}
+	if _, err := expandPathFrom(base, "missing"); err == nil {
+		t.Error("expected an error for a path that does not exist")
+	}
+	file := filepath.Join(base, "file")
+	if err := os.WriteFile(file, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := expandPathFrom(base, "file"); err == nil {
+		t.Error("expected an error for a path that is not a directory")
+	}
+}
+
+// twoProjects sets up two sibling repositories with a registered pane each and
+// leaves the process in the first one.
+func twoProjects(t *testing.T) (a, b string, f *fakeMux) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PANECOM_STATE_DIR", "")
+	a = filepath.Join(home, "a")
+	b = filepath.Join(home, "b")
+	for _, d := range []string{a, b} {
+		if err := os.MkdirAll(filepath.Join(d, ".git"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(d, ".panecom"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f = &fakeMux{}
+	withFakeMux(t, f)
+	inDir(t, a, func() { f.pane = "pa"; cmdRegister("d") })
+	inDir(t, b, func() { f.pane = "pb"; cmdRegister("rev") })
+	f.pane = "pa"
+	return resolvedPath(t, a), resolvedPath(t, b), f
+}
+
+func TestLinkAndResolveAcrossProjects(t *testing.T) {
+	a, b, _ := twoProjects(t)
+
+	inDir(t, a, func() {
+		target, roles, err := linkProject("other", "../b", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target != b {
+			t.Errorf("link target = %s, want %s", target, b)
+		}
+		if len(roles) != 1 || roles[0].Role != "rev" || roles[0].PaneID != "pb" {
+			t.Fatalf("link reported roles %+v, want rev -> pb", roles)
+		}
+
+		// The whole point: address the other project's role.
+		if got := resolveRoleForCommand("other/rev"); got != "pb" {
+			t.Errorf("resolve other/rev = %s, want pb", got)
+		}
+		// The local namespace keeps working unqualified.
+		if got := resolveRoleForCommand("d"); got != "pa" {
+			t.Errorf("resolve d = %s, want pa", got)
+		}
+	})
+
+	// The link is one-directional: b has not linked back.
+	inDir(t, b, func() {
+		_, sRoot := requireSession()
+		nsHash := currentNamespaceHash(sRoot, "pb")
+		if _, err := linkTarget(nsHash, "other"); err == nil {
+			t.Error("link leaked into the target project")
+		}
+	})
+}
+
+func TestLinkNormalizesSubdirectoryToProjectRoot(t *testing.T) {
+	a, b, _ := twoProjects(t)
+	sub := filepath.Join(b, "deep", "deeper")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	inDir(t, a, func() {
+		target, _, err := linkProject("other", filepath.Join("..", "b", "deep", "deeper"), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target != b {
+			t.Errorf("link target = %s, want the project root %s", target, b)
+		}
+		if got := resolveRoleForCommand("other/rev"); got != "pb" {
+			t.Errorf("resolve other/rev = %s, want pb", got)
+		}
+	})
+}
+
+func TestLinkRejectsSelfAndUnregisteredTarget(t *testing.T) {
+	a, _, _ := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("self", ".", false); err == nil {
+			t.Error("expected an error when linking a project to itself")
+		}
+	})
+
+	// A project with no registered role fails unless forced.
+	empty := filepath.Join(filepath.Dir(a), "empty")
+	if err := os.MkdirAll(filepath.Join(empty, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, a, func() {
+		if _, _, err := linkProject("empty", "../empty", false); err == nil {
+			t.Error("expected an error when the target has no roles")
+		}
+		if _, _, err := linkProject("empty", "../empty", true); err != nil {
+			t.Errorf("--force should link anyway: %v", err)
+		}
+	})
+}
+
+func TestLinkedProjectHonoursStateDirOverride(t *testing.T) {
+	a, b, _ := twoProjects(t)
+	// Re-run the setup under an explicit store: every project, linked ones
+	// included, must resolve inside it.
+	store := filepath.Join(filepath.Dir(a), "store")
+	t.Setenv("PANECOM_STATE_DIR", store)
+
+	f := &fakeMux{}
+	withFakeMux(t, f)
+	inDir(t, a, func() { f.pane = "pa"; cmdRegister("d") })
+	inDir(t, b, func() { f.pane = "pb"; cmdRegister("rev") })
+	f.pane = "pa"
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		if got := resolveRoleForCommand("other/rev"); got != "pb" {
+			t.Errorf("resolve other/rev = %s, want pb", got)
+		}
+	})
+	if _, err := os.Stat(store); err != nil {
+		t.Errorf("state was not written to the override store: %v", err)
+	}
+}
+
+func TestUnlinkRejectsAliasThatEscapesTheLinksDirectory(t *testing.T) {
+	a, _, _ := twoProjects(t)
+
+	inDir(t, a, func() {
+		_, sRoot := requireSession()
+		nsHash := currentNamespaceHash(sRoot, "pa")
+
+		// A file that is not a link and must survive.
+		victim := filepath.Join(sRoot, "panes", "pa")
+		if _, err := os.Stat(victim); err != nil {
+			t.Fatalf("expected a pane mapping to exist: %v", err)
+		}
+		escape := filepath.Join("..", "..", "sessions", filepath.Base(sRoot), "panes", "pa")
+		if err := unlinkProject(escape); err == nil {
+			t.Error("expected an error for an alias containing a path")
+		}
+		if _, err := os.Stat(victim); err != nil {
+			t.Errorf("unlink deleted a file outside the links directory: %v", err)
+		}
+
+		// A link belonging to another namespace must also be out of reach.
+		other := filepath.Join(stateRoot(), "externals", "deadbeef")
+		if err := atomicWrite(filepath.Join(other, "keep"), "/somewhere"); err != nil {
+			t.Fatal(err)
+		}
+		if err := unlinkProject(filepath.Join("..", "deadbeef", "keep")); err == nil {
+			t.Error("expected an error for an alias reaching another namespace")
+		}
+		if _, err := os.Stat(filepath.Join(other, "keep")); err != nil {
+			t.Errorf("unlink deleted another namespace's link: %v", err)
+		}
+
+		// The ordinary case still works.
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		if err := unlinkProject("other"); err != nil {
+			t.Errorf("unlink of a real link failed: %v", err)
+		}
+		if _, err := linkTarget(nsHash, "other"); err == nil {
+			t.Error("link survived unlink")
+		}
+	})
+}
+
+func TestLinkRequiresALivePane(t *testing.T) {
+	a, b, f := twoProjects(t)
+	f.dead = map[string]bool{"pb": true}
+
+	inDir(t, a, func() {
+		_, _, err := linkProject("other", "../b", false)
+		if err == nil {
+			t.Fatal("expected an error when every role in the target is stale")
+		}
+		if !strings.Contains(err.Error(), "no live roles") {
+			t.Errorf("error should say the roles are stale, got: %v", err)
+		}
+
+		target, roles, err := linkProject("other", "../b", true)
+		if err != nil {
+			t.Fatalf("--force should link anyway: %v", err)
+		}
+		if target != b {
+			t.Errorf("link target = %s, want %s", target, b)
+		}
+		// The stale role is still reported so the user can see why.
+		if len(roles) != 1 || roles[0].Role != "rev" || roles[0].Alive {
+			t.Errorf("roles = %+v, want rev reported as stale", roles)
+		}
+	})
+}
+
+func TestProfileExternalsLandInTheLaunchingProject(t *testing.T) {
+	a, b, f := twoProjects(t)
+	// A shared store is where this goes wrong: one store, several projects.
+	store := filepath.Join(filepath.Dir(a), "store")
+	t.Setenv("PANECOM_STATE_DIR", store)
+
+	c := filepath.Join(filepath.Dir(a), "c")
+	if err := os.MkdirAll(filepath.Join(c, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, c, func() { f.pane = "pc"; cmdRegister("rev") })
+
+	// This pane is registered in B, but the profile is launched from A.
+	inDir(t, b, func() { f.pane = "pb"; cmdRegister("d") })
+
+	profile := profileConfig{
+		Panes:            []paneConfig{{Role: "d"}},
+		ExternalProjects: map[string]string{"other": "../c"},
+	}
+	inDir(t, a, func() { materializeExternalProjects(profile) })
+
+	// The pane the profile starts registers in A, so the link has to be there.
+	inDir(t, a, func() {
+		f.pane = "pa"
+		cmdRegister("d")
+		if got := resolveRoleForCommand("other/rev"); got != "pc" {
+			t.Errorf("resolve other/rev from the launched project = %s, want pc", got)
+		}
+	})
+
+	// It must not have been written into the unrelated project B.
+	inDir(t, b, func() {
+		_, sRoot := requireSession()
+		if _, err := linkTarget(currentNamespaceHash(sRoot, "pb"), "other"); err == nil {
+			t.Error("link was written into the namespace of the already-registered pane")
+		}
+	})
+}
+
+func TestLinkPersistsAcrossSessions(t *testing.T) {
+	a, b, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	// Links record paths rather than pane IDs, so a new multiplexer session
+	// must still see them.
+	f.session = "later"
+	inDir(t, a, func() {
+		_, sRoot := requireSession()
+		nsHash := currentNamespaceHash(sRoot, "")
+		target, err := linkTarget(nsHash, "other")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target != b {
+			t.Errorf("link target = %s, want %s", target, b)
+		}
+	})
+}
+
 func TestStateRootEnvOverride(t *testing.T) {
 	t.Setenv("PANECOM_STATE_DIR", "/custom/state/dir")
 	root := stateRoot()
@@ -684,10 +991,17 @@ type fakeMux struct {
 	sentText []string
 	enters   int
 	pane     string
+	session  string
+	dead     map[string]bool
 }
 
-func (f *fakeMux) Kind() string                 { return "fake" }
-func (f *fakeMux) SessionName() (string, error) { return "fake", nil }
+func (f *fakeMux) Kind() string { return "fake" }
+func (f *fakeMux) SessionName() (string, error) {
+	if f.session != "" {
+		return f.session, nil
+	}
+	return "fake", nil
+}
 func (f *fakeMux) CurrentPaneID() (string, error) {
 	if f.pane != "" {
 		return f.pane, nil
@@ -697,7 +1011,9 @@ func (f *fakeMux) CurrentPaneID() (string, error) {
 func (f *fakeMux) ListPanes(string) ([]Pane, error) {
 	return []Pane{{ID: "p1"}}, nil
 }
-func (f *fakeMux) PaneExists(string, string) (bool, error) { return true, nil }
+func (f *fakeMux) PaneExists(_ string, paneID string) (bool, error) {
+	return !f.dead[paneID], nil
+}
 func (f *fakeMux) NewPane(string, string, string) (string, error) {
 	return "p2", nil
 }

@@ -122,6 +122,9 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | `[--mux zellij\|tmux]` | マルチプレクサを明示指定（省略時は自動検出） |
 | `register <role>` | 現在の pane を role として登録 |
 | `whoami` | 現在の pane の role を表示 |
+| `list [--all \| <project>]` | role 一覧を表示（自分 / リンク先 / 全部） |
+| `link [-f] <project> <path>` | 別プロジェクトをリンク（引数なしでリンク一覧） |
+| `unlink <project>` | リンクを削除 |
 | `resolve <role>` | role → pane ID を解決 |
 | `open [-d right\|down] <role>` | 新しい pane を開いて role を登録 |
 | `dump [--full] <role>` | 対象 pane の画面を取得 |
@@ -235,11 +238,13 @@ profiles:
 | `direction` | pane の分割方向 (`right` / `down`) | `right` |
 | `foreground` | `-f` 指定時にこの pane にフォーカス | `false` |
 
+プロファイル直下には `external_projects` も書けます（後述の「別プロジェクトとの連携」参照）。
+
 ### 設定ファイルの優先順位
 
 | 優先度 | パス |
 |---|---|
-| 高 | `.panecom/config.yaml` または `.panecom/config.yml`（cwd から親を walk-up） |
+| 高 | `.panecom/config.yaml` または `.panecom/config.yml`（プロジェクトルートから親を walk-up） |
 | 低 | `~/.config/panecom/config.yaml` または `config.yml` |
 
 `XDG_CONFIG_HOME` が設定されている場合、グローバル設定は `$XDG_CONFIG_HOME/panecom/` を参照します。
@@ -276,6 +281,67 @@ role はセッション + **プロジェクトルート**で namespace が決ま
 
 > **v0.3.0 からの変更**: 以前は作業ディレクトリそのものが namespace を決めていました。アップグレード後は namespace のハッシュが変わります。登録済みの pane は `panes/<id>` に namespace を直接記録しているため解決は維持されますが、**アップグレード前に登録した pane と新しく登録した pane を相互に見せるには、古い側で `panecom register` をやり直してください**。
 
+### 別プロジェクトとの連携
+
+別プロジェクトをリンクすると、その role を `<project>/<role>` で呼べます。role 名に `/` は使えないので、最後の `/` の手前がプロジェクト、後ろが role です。修飾しない `<role>` は従来どおり自分の namespace を指します。
+
+```bash
+$ panecom link mcp ../rh_sc_mcp
+mcp -> /path/to/rh_sc_mcp
+  developer    terminal_12
+  reviewer     terminal_13
+
+$ panecom send mcp/reviewer "schema 確認お願いします"
+$ panecom exec mcp/developer "git status"
+```
+
+`link` は相手の role をその場で検証して一覧表示します。相手がまだ register していなければ失敗するので、送信時まで気づかないということがありません。相手の起動前に張っておきたい場合は `-f` を使います。
+
+```bash
+$ panecom link mcp ../rh_sc_mcp
+panecom: no roles registered in /path/to/rh_sc_mcp (session: ope)
+         pass --force to link anyway
+```
+
+一覧は `list` で確認できます。
+
+```bash
+$ panecom list            # 自分の namespace
+$ panecom list mcp        # リンク先
+$ panecom list --all      # 自分 + 全リンク先
+$ panecom link            # リンクの一覧（role は引かない）
+$ panecom unlink mcp
+```
+
+#### 性質
+
+- **リンクが保存するのはパス 1 本だけ**です。role は呼び出しのたびに相手の状態を直接読むので、相手が register し直しても張り直しは不要です
+- **片方向**です。相手の状態には何も書き込まれません。往復させるには相手側でも `panecom link` を張ります
+- **セッションを跨いで残ります**。`link` はパスを記録するだけなので、Zellij / tmux のセッションを作り直しても有効です
+- 渡したパスは**プロジェクトルートに正規化**されます。`../rh_sc_mcp/src` のようにサブディレクトリを指定しても、上記 anchor の規則で親を遡って解決します
+- 送信先のペインは**同じマルチプレクサセッション内**にある必要があります。pane ID がセッション内でしか有効でないためです
+
+#### 繰り返す連携を config に残す
+
+毎回 `link` するのが面倒になったら、プロファイルに宣言できます。`panecom profile <name>` の起動時にリンクが作られます。
+
+```yaml
+profiles:
+  dev:
+    external_projects:
+      mcp: ../rh_sc_mcp
+    panes:
+      - role: developer
+        cmd: 'claude --allow-dangerously-skip-permissions'
+        foreground: true
+      - role: reviewer
+        cmd: 'codex --yolo'
+```
+
+パスは config のあるプロジェクトルートからの相対として解決されます。コミットして共有する場合は、絶対パスではなく相対パスを使ってください。起動時点では相手がまだ動いていないのが普通なので、ここでの materialize は role の有無を検証しません（`link -f` 相当）。
+
+`.panecom/externals/` 配下の実体はマシン固有の絶対パスなので `.gitignore` 対象です。共有したいリンクは config に書きます。
+
 ### State
 
 状態ディレクトリは以下の優先順で決定されます:
@@ -289,6 +355,9 @@ role はセッション + **プロジェクトルート**で namespace が決ま
 ```
 .panecom/
 ├── config.yaml          # プロファイル設定
+├── externals/           # 別プロジェクトへのリンク（セッションを跨いで永続）
+│   └── <anchor-hash>/
+│       └── <alias>      # 連携先のプロジェクトルート
 ├── sessions/            # ランタイム状態（自動生成）
 │   └── <session-hash>/
 │       ├── panes/

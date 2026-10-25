@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,14 +32,22 @@ func hashString(s string) string {
 }
 
 func stateRoot() string {
+	return stateRootFor(namespaceAnchor())
+}
+
+// stateRootFor returns the store that serves the project rooted at anchor.
+// Starting at the project root rather than the working directory keeps every
+// pane of one project on the same store: a stale .panecom in a subdirectory
+// would otherwise shadow the project's own store and split it in two.
+//
+// PANECOM_STATE_DIR overrides every project, including linked ones. It says
+// all state lives in one store, where projects are still separated by
+// namespace, so honouring it only for the local project would send a link
+// looking into a store nobody writes to.
+func stateRootFor(anchor string) string {
 	if dir := os.Getenv("PANECOM_STATE_DIR"); dir != "" {
 		return dir
 	}
-	// Start at the project root so that every pane of one project reaches the
-	// same store. Searching from the working directory instead would let a
-	// stale .panecom in a subdirectory shadow the project's own store, which
-	// splits the project across two state roots.
-	anchor := namespaceAnchor()
 	for dir := anchor; ; {
 		candidate := filepath.Join(dir, ".panecom")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
@@ -54,13 +63,20 @@ func stateRoot() string {
 }
 
 func sessionRoot(muxKind, sessionName string) string {
+	return sessionRootIn(stateRoot(), muxKind, sessionName)
+}
+
+// sessionRootIn locates a session inside an arbitrary store, which is how a
+// linked project's panes are reached: the session key is shared, the store is
+// not.
+func sessionRootIn(store, muxKind, sessionName string) string {
 	var key string
 	if muxKind == "zellij" {
 		key = sessionName
 	} else {
 		key = muxKind + ":" + sessionName
 	}
-	return filepath.Join(stateRoot(), "sessions", hashString(key))
+	return filepath.Join(store, "sessions", hashString(key))
 }
 
 func canonicalCwd() string {
@@ -184,6 +200,82 @@ func namespaceForCurrentPane(sRoot, paneID string) (string, error) {
 		return "", fmt.Errorf("pane '%s' is not registered", paneID)
 	}
 	return filepath.Join(sRoot, "namespaces", anchorHash), nil
+}
+
+// externalsDir holds this namespace's links. Links live outside sessions/
+// because they record paths rather than pane IDs, so they stay valid across
+// multiplexer sessions. They are keyed by namespace because one store can
+// serve several projects (a catch-all ~/.panecom does).
+func externalsDir(nsHash string) string {
+	return filepath.Join(stateRoot(), "externals", nsHash)
+}
+
+// currentNamespaceHash identifies the namespace the current pane acts in. A
+// registered pane keeps the namespace recorded at register time so that a
+// moved working directory cannot silently switch it.
+func currentNamespaceHash(sRoot, paneID string) string {
+	if paneID != "" {
+		if recorded, err := readFile(filepath.Join(sRoot, "panes", paneID)); err == nil && recorded != "" {
+			return recorded
+		}
+	}
+	return hashString(namespaceAnchor())
+}
+
+// splitQualifiedRole splits "alias/role" into its parts. A bare role has no
+// alias, which is why role names may not contain a slash.
+func splitQualifiedRole(qualified string) (alias, role string) {
+	if i := strings.LastIndex(qualified, "/"); i >= 0 {
+		return qualified[:i], qualified[i+1:]
+	}
+	return "", qualified
+}
+
+// linkTarget returns the project root recorded for alias.
+func linkTarget(nsHash, alias string) (string, error) {
+	if !rolePattern.MatchString(alias) {
+		return "", fmt.Errorf("invalid project alias '%s'", alias)
+	}
+	target, err := readFile(filepath.Join(externalsDir(nsHash), alias))
+	if err != nil || target == "" {
+		return "", fmt.Errorf("project '%s' is not linked (use: panecom link %s <path>)", alias, alias)
+	}
+	return target, nil
+}
+
+// externalNamespaceDir locates a linked project's namespace. The session is
+// shared with the caller because pane IDs are only meaningful within one
+// multiplexer session; the store and the namespace come from the target.
+func externalNamespaceDir(session, targetAnchor string) string {
+	store := stateRootFor(targetAnchor)
+	return filepath.Join(sessionRootIn(store, mux.Kind(), session), "namespaces", hashString(targetAnchor))
+}
+
+type roleEntry struct {
+	Role   string
+	PaneID string
+	Alive  bool
+}
+
+// listRoles reports the roles of a namespace together with pane liveness.
+func listRoles(session, nsDir string) []roleEntry {
+	entries, err := os.ReadDir(filepath.Join(nsDir, "roles"))
+	if err != nil {
+		return nil
+	}
+	var out []roleEntry
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		paneID, err := readFile(filepath.Join(nsDir, "roles", e.Name()))
+		if err != nil || paneID == "" {
+			continue
+		}
+		alive, err := mux.PaneExists(session, paneID)
+		out = append(out, roleEntry{Role: e.Name(), PaneID: paneID, Alive: err == nil && alive})
+	}
+	return out
 }
 
 // describeNamespace names the namespace that was actually searched. The anchor
@@ -329,25 +421,34 @@ func cmdWhoami() {
 	die("this pane is not registered")
 }
 
-func resolveRoleForCommand(role string) string {
+// resolveRoleForCommand accepts a bare role in the caller's own namespace or
+// "alias/role" in a linked project.
+func resolveRoleForCommand(qualified string) string {
+	alias, role := splitQualifiedRole(qualified)
 	validateRole(role)
 	session, sRoot := requireSession()
 	paneID := currentPaneIDOrEmpty()
+	nsHash := currentNamespaceHash(sRoot, paneID)
 
-	var nsDir string
-	if paneID != "" {
-		var err error
-		nsDir, err = namespaceForCurrentPane(sRoot, paneID)
-		if err != nil {
-			nsDir = namespaceDir(sRoot, namespaceAnchor())
-		}
+	var nsDir, where string
+	if alias == "" {
+		nsDir = filepath.Join(sRoot, "namespaces", nsHash)
+		where = describeNamespace(nsDir)
 	} else {
-		nsDir = namespaceDir(sRoot, namespaceAnchor())
+		target, err := linkTarget(nsHash, alias)
+		if err != nil {
+			die(err.Error())
+		}
+		nsDir = externalNamespaceDir(session, target)
+		// The link records the project root, so report that rather than the
+		// namespace path: a linked project that never registered has no
+		// namespace directory and therefore no .cwd to read back.
+		where = target
 	}
 
 	targetPaneID, err := resolveRole(nsDir, role)
 	if err != nil {
-		die(fmt.Sprintf("role '%s' is not registered in namespace %s", role, describeNamespace(nsDir)))
+		die(fmt.Sprintf("role '%s' is not registered in namespace %s", role, where))
 	}
 
 	exists, err := mux.PaneExists(session, targetPaneID)
@@ -355,13 +456,202 @@ func resolveRoleForCommand(role string) string {
 		die(fmt.Sprintf("failed to check pane '%s': %s", targetPaneID, err.Error()))
 	}
 	if !exists {
+		// The pane mapping lives beside the namespace, which for a linked
+		// project is the target's store rather than ours.
+		panesDir := filepath.Join(filepath.Dir(filepath.Dir(nsDir)), "panes")
 		_ = os.Remove(filepath.Join(nsDir, "roles", role))
-		_ = os.Remove(filepath.Join(sRoot, "panes", targetPaneID))
-		_ = os.Remove(filepath.Join(sRoot, "panes", targetPaneID+".bin"))
+		_ = os.Remove(filepath.Join(panesDir, targetPaneID))
+		_ = os.Remove(filepath.Join(panesDir, targetPaneID+".bin"))
 		die(fmt.Sprintf("role '%s' points to stale pane '%s'", role, targetPaneID))
 	}
 
 	return targetPaneID
+}
+
+// expandPath turns a user-supplied path into an absolute, symlink-free one.
+// Relative paths are taken from the working directory, which is what a shell
+// user typing ../other expects.
+func expandPath(path string) (string, error) {
+	return expandPathFrom(canonicalCwd(), path)
+}
+
+// expandPathFrom resolves path against base when it is relative.
+func expandPathFrom(base, path string) (string, error) {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home := canonicalHome()
+		if home == "" {
+			return "", fmt.Errorf("cannot expand '~': home directory is unknown")
+		}
+		path = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("no such directory: %s", abs)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("not a directory: %s", abs)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	return abs, nil
+}
+
+func countAlive(entries []roleEntry) int {
+	n := 0
+	for _, e := range entries {
+		if e.Alive {
+			n++
+		}
+	}
+	return n
+}
+
+func printRoles(entries []roleEntry) {
+	for _, e := range entries {
+		state := ""
+		if !e.Alive {
+			state = " (stale)"
+		}
+		fmt.Printf("  %-12s %s%s\n", e.Role, e.PaneID, state)
+	}
+}
+
+// linkProject records alias and reports what it reached. Verifying the target
+// here is the point of the command: a link that cannot be used should fail now
+// rather than at the first send.
+func linkProject(alias, path string, force bool) (string, []roleEntry, error) {
+	if !rolePattern.MatchString(alias) {
+		return "", nil, fmt.Errorf("invalid project alias '%s' (must match [A-Za-z0-9][A-Za-z0-9._-]*)", alias)
+	}
+	session, sRoot := requireSession()
+	nsHash := currentNamespaceHash(sRoot, currentPaneIDOrEmpty())
+
+	resolved, err := expandPath(path)
+	if err != nil {
+		return "", nil, err
+	}
+	// Normalise to the project root so that linking any directory inside the
+	// target project reaches the same namespace its panes registered into.
+	target := namespaceAnchorFrom(resolved, canonicalHome())
+	if hashString(target) == nsHash {
+		return "", nil, fmt.Errorf("cannot link a project to itself: %s", target)
+	}
+
+	// A link is only useful if something is actually reachable, so require a
+	// live pane. Dead roles still get reported, they just do not count.
+	roles := listRoles(session, externalNamespaceDir(session, target))
+	if !force && countAlive(roles) == 0 {
+		detail := "no roles registered"
+		if len(roles) > 0 {
+			detail = "no live roles"
+		}
+		return "", nil, fmt.Errorf("%s in %s (session: %s)\n       pass --force to link anyway", detail, target, session)
+	}
+	if err := atomicWrite(filepath.Join(externalsDir(nsHash), alias), target); err != nil {
+		return "", nil, fmt.Errorf("failed to write link: %w", err)
+	}
+	return target, roles, nil
+}
+
+func cmdLink(alias, path string, force bool) {
+	target, roles, err := linkProject(alias, path, force)
+	if err != nil {
+		die(err.Error())
+	}
+	fmt.Printf("%s -> %s\n", alias, target)
+	printRoles(roles)
+}
+
+func cmdLinkList() {
+	_, sRoot := requireSession()
+	nsHash := currentNamespaceHash(sRoot, currentPaneIDOrEmpty())
+	entries, err := os.ReadDir(externalsDir(nsHash))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		target, err := readFile(filepath.Join(externalsDir(nsHash), e.Name()))
+		if err != nil {
+			continue
+		}
+		fmt.Printf("%-12s -> %s\n", e.Name(), target)
+	}
+}
+
+func unlinkProject(alias string) error {
+	// Without this the alias is pasted straight into a path, so "../.." would
+	// reach outside the links directory and delete files that are not links.
+	if !rolePattern.MatchString(alias) {
+		return fmt.Errorf("invalid project alias '%s' (must match [A-Za-z0-9][A-Za-z0-9._-]*)", alias)
+	}
+	_, sRoot := requireSession()
+	nsHash := currentNamespaceHash(sRoot, currentPaneIDOrEmpty())
+	path := filepath.Join(externalsDir(nsHash), alias)
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("project '%s' is not linked", alias)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("failed to remove link: %w", err)
+	}
+	return nil
+}
+
+func cmdUnlink(alias string) {
+	if err := unlinkProject(alias); err != nil {
+		die(err.Error())
+	}
+	fmt.Println(alias)
+}
+
+// cmdList shows the roles of this namespace, of one linked project, or of all
+// of them.
+func cmdList(alias string, all bool) {
+	session, sRoot := requireSession()
+	nsHash := currentNamespaceHash(sRoot, currentPaneIDOrEmpty())
+
+	if alias != "" {
+		target, err := linkTarget(nsHash, alias)
+		if err != nil {
+			die(err.Error())
+		}
+		fmt.Printf("%s -> %s\n", alias, target)
+		printRoles(listRoles(session, externalNamespaceDir(session, target)))
+		return
+	}
+
+	own := filepath.Join(sRoot, "namespaces", nsHash)
+	fmt.Println(describeNamespace(own))
+	printRoles(listRoles(session, own))
+
+	if !all {
+		return
+	}
+	entries, err := os.ReadDir(externalsDir(nsHash))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		target, err := readFile(filepath.Join(externalsDir(nsHash), e.Name()))
+		if err != nil {
+			continue
+		}
+		fmt.Printf("\n%s -> %s\n", e.Name(), target)
+		printRoles(listRoles(session, externalNamespaceDir(session, target)))
+	}
 }
 
 func cmdResolve(role string) {
@@ -960,6 +1250,10 @@ type paneConfig struct {
 
 type profileConfig struct {
 	Panes []paneConfig `yaml:"panes"`
+	// ExternalProjects are materialised into links when the profile launches,
+	// so a recurring collaboration does not have to be linked by hand each
+	// time. Paths are resolved relative to the config file's project root.
+	ExternalProjects map[string]string `yaml:"external_projects"`
 }
 
 type config struct {
@@ -986,10 +1280,11 @@ func findConfigFile(dir string) string {
 	return ""
 }
 
+// findProjectConfig searches from the project root rather than the working
+// directory, matching stateRoot so that one project always reads one config
+// even when the working directory has moved into a subdirectory.
 func findProjectConfig() string {
-	cwd := canonicalCwd()
-	dir := cwd
-	for {
+	for dir := namespaceAnchor(); ; {
 		panecomDir := filepath.Join(dir, ".panecom")
 		if path := findConfigFile(panecomDir); path != "" {
 			return path
@@ -1062,6 +1357,54 @@ func loadConfig() (*config, error) {
 	return merged, nil
 }
 
+// materializeExternalProjects turns a profile's declared collaborations into
+// links. Targets are usually not running yet when a profile launches, so a
+// missing role is not an error here; resolution still verifies at send time.
+// Failures are reported but never block the launch.
+func materializeExternalProjects(profile profileConfig) {
+	if len(profile.ExternalProjects) == 0 {
+		return
+	}
+	// Anchor, not the launching pane's namespace: the panes this profile is
+	// about to start register from this working directory, so the links have
+	// to land where they will look for them. A pane registered in another
+	// project would otherwise divert them to that project's namespace.
+	anchor := namespaceAnchor()
+	nsHash := hashString(anchor)
+
+	for _, alias := range sortedKeys(profile.ExternalProjects) {
+		path := profile.ExternalProjects[alias]
+		if !rolePattern.MatchString(alias) {
+			fmt.Fprintf(os.Stderr, "panecom: skipping invalid project alias '%s'\n", alias)
+			continue
+		}
+		resolved, err := expandPathFrom(anchor, path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "panecom: skipping project '%s': %s\n", alias, err.Error())
+			continue
+		}
+		target := namespaceAnchorFrom(resolved, canonicalHome())
+		if hashString(target) == nsHash {
+			fmt.Fprintf(os.Stderr, "panecom: skipping project '%s': refers to this project\n", alias)
+			continue
+		}
+		if err := atomicWrite(filepath.Join(externalsDir(nsHash), alias), target); err != nil {
+			fmt.Fprintf(os.Stderr, "panecom: skipping project '%s': %s\n", alias, err.Error())
+			continue
+		}
+		fmt.Printf("%s -> %s\n", alias, target)
+	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func cmdProfile(name string, binPath string, focus bool) {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -1082,6 +1425,8 @@ func cmdProfile(name string, binPath string, focus bool) {
 	}
 
 	_ = binPath
+
+	materializeExternalProjects(profile)
 
 	cwd := canonicalCwd()
 	myPaneID := currentPaneIDOrEmpty()
@@ -1181,6 +1526,10 @@ func usage() {
 Commands:
   register <role>                Register current pane as <role>
   whoami                         Show current pane's role
+  list [--all | <project>]       List roles here, or in a linked project
+  link [-f] <project> <path>     Link a project so its roles can be addressed
+                                 as <project>/<role>; no args lists links
+  unlink <project>               Remove a link
   resolve <role>                 Show pane ID for <role>
   open [-d right|down] <role>    Open new pane and register as <role>
   dump [--full] [-l N] <role>    Dump screen of <role>'s pane
@@ -1249,6 +1598,45 @@ func main() {
 			usage()
 		}
 		cmdWhoami()
+	case "link":
+		force := false
+		positional := []string{}
+		for _, a := range args[1:] {
+			if a == "-f" || a == "--force" {
+				force = true
+			} else {
+				positional = append(positional, a)
+			}
+		}
+		switch len(positional) {
+		case 0:
+			cmdLinkList()
+		case 2:
+			cmdLink(positional[0], positional[1], force)
+		default:
+			usage()
+		}
+	case "unlink":
+		if len(args) != 2 {
+			usage()
+		}
+		cmdUnlink(args[1])
+	case "list":
+		all := false
+		alias := ""
+		for _, a := range args[1:] {
+			if a == "--all" {
+				all = true
+			} else if alias == "" {
+				alias = a
+			} else {
+				usage()
+			}
+		}
+		if alias != "" && all {
+			usage()
+		}
+		cmdList(alias, all)
 	case "open":
 		direction := ""
 		binPath := ""
