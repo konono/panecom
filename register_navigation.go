@@ -86,37 +86,3 @@ func orderedNeighbor(panes []Pane, selected int, direction byte) int {
 	}
 	return selected
 }
-
-// cycleTab is explicit because physical directions cannot cross tabs/windows.
-func cycleTab(panes []Pane, selected, step int) int {
-	var tabs []string
-	for _, p := range panes {
-		found := false
-		for _, tab := range tabs {
-			if tab == p.TabID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			tabs = append(tabs, p.TabID)
-		}
-	}
-	if len(tabs) < 2 {
-		return selected
-	}
-	current := 0
-	for i, tab := range tabs {
-		if tab == panes[selected].TabID {
-			current = i
-			break
-		}
-	}
-	target := tabs[(current+step+len(tabs))%len(tabs)]
-	for i, p := range panes {
-		if p.TabID == target {
-			return i
-		}
-	}
-	return selected
-}

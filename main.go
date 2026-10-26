@@ -1537,7 +1537,7 @@ func usage() {
 
 Commands:
   register                       Choose a pane and role interactively
-                                 Arrows: move by pane layout; Tab: change tab
+                                 Arrows: move by pane layout in this tab
   register <role>                Register current pane as <role>
   whoami                         Show current pane's role
   list [--all | <project>]       List roles here, or in a linked project

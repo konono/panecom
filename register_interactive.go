@@ -53,13 +53,18 @@ func cmdRegisterInteractive() {
 	if len(panes) == 0 {
 		die("no terminal panes found in this session")
 	}
+	currentID := requirePaneID()
+	panes, err = panesInCurrentTab(panes, currentID)
+	if err != nil {
+		die(err.Error())
+	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		die("interactive register needs a terminal (or use: panecom register <role>)")
 	}
 	defer tty.Close()
 
-	pane, ok, err := pickPaneTTY(tty, panes, currentPaneIDOrEmpty())
+	pane, ok, err := pickPaneTTY(tty, panes, currentID)
 	if err != nil {
 		die("pane selection failed: " + err.Error())
 	}
@@ -86,6 +91,21 @@ func cmdRegisterInteractive() {
 		die(err.Error())
 	}
 	fmt.Printf("%s -> %s (%s)\n", role, pane.Title, anchor)
+}
+
+func panesInCurrentTab(panes []Pane, currentID string) ([]Pane, error) {
+	for _, current := range panes {
+		if current.ID == currentID {
+			var local []Pane
+			for _, pane := range panes {
+				if pane.TabID == current.TabID {
+					local = append(local, pane)
+				}
+			}
+			return local, nil
+		}
+	}
+	return nil, fmt.Errorf("current pane %s is not in the session's pane list", currentID)
 }
 
 func promptLine(out io.Writer, reader *bufio.Reader, label string) (string, error) {
@@ -164,8 +184,6 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 			return panes[selected], true, nil
 		case 'q', 3:
 			return Pane{}, false, nil
-		case '\t':
-			selected = cycleTab(panes, selected, 1)
 		case 'j':
 			selected = spatialNeighbor(panes, selected, 'D')
 		case 'k':
@@ -210,8 +228,6 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 					selected = spatialNeighbor(panes, selected, 'R')
 				case 'D':
 					selected = spatialNeighbor(panes, selected, 'L')
-				case 'Z':
-					selected = cycleTab(panes, selected, -1)
 				default:
 					if code >= '0' && code <= '9' || code == ';' {
 						continue
@@ -251,7 +267,7 @@ func inputReady(in io.Reader, timeoutMS int) bool {
 func renderPanePicker(panes []Pane, selected int, preview string, width, height int) string {
 	var b strings.Builder
 	b.WriteString("\x1b[H\x1b[2J")
-	b.WriteString("Select a pane  arrows/hjkl: move  Tab: next tab  Enter: select  Esc/q: cancel\r\n")
+	b.WriteString("Select a pane  arrows/hjkl: move  Enter: select  Esc/q: cancel\r\n")
 	b.WriteString("Tab/window: " + panes[selected].TabName + "  (" + panes[selected].TabID + ")\r\n\r\n")
 	var shown []int
 	for i, p := range panes {

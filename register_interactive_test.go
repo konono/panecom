@@ -79,8 +79,17 @@ func TestSpatialNavigationUsesLayoutNotListOrder(t *testing.T) {
 	if got := panes[spatialNeighbor(panes, 2, 'D')].ID; got != "bl" {
 		t.Errorf("down at edge wrapped to %s", got)
 	}
-	if got := panes[cycleTab(panes, 2, 1)].ID; got != "other-tab" {
-		t.Errorf("Tab selected %s", got)
+	local, err := panesInCurrentTab(panes, "bl")
+	if err != nil || len(local) != 4 {
+		t.Fatalf("current tab panes=%v err=%v", local, err)
+	}
+	for _, pane := range local {
+		if pane.TabID != "1" {
+			t.Fatalf("other tab pane leaked into picker: %+v", pane)
+		}
+	}
+	if _, err := panesInCurrentTab(panes, "missing"); err == nil {
+		t.Error("missing current pane should fail")
 	}
 	var out bytes.Buffer
 	selected, ok, err := pickPane(panes, "bl", strings.NewReader("\x1b[1;2A\x1b[C\r"), &out, 100, 24, nil, nil)
