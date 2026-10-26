@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,6 +348,111 @@ func TestAllSkillTargetsDeduplicatesSymlinkedHome(t *testing.T) {
 	untracked, err := untrackedSkills(alias, home, manifest)
 	if err != nil || len(untracked) != 0 {
 		t.Fatalf("installed symlinked target shown as untracked: %+v err=%v", untracked, err)
+	}
+}
+
+func TestSkillInstallUsesOneManifestEntryAcrossHomeAliases(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "home")
+	alias := filepath.Join(parent, "home-link")
+	if err := os.Mkdir(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, alias); err != nil {
+		t.Fatal(err)
+	}
+	aliased, _ := skillTargets(alias, "", "codex", "user")
+	canonical, _ := skillTargets(home, "", "codex", "user")
+	path := canonical[0].Path
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	const original = "original instructions\n"
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := installSkills(alias, aliased); err != nil {
+		t.Fatal(err)
+	}
+	if err := installSkills(home, canonical); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(home)
+	if err != nil || len(m.Installs) != 1 {
+		t.Fatalf("same destination tracked twice: %+v err=%v", m, err)
+	}
+	if err := uninstallSkills(home, []string{canonical[0].Path}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != original {
+		t.Fatalf("original not restored: %q err=%v", got, err)
+	}
+}
+
+func TestSkillUninstallRecoversExistingDuplicateManifestEntries(t *testing.T) {
+	home := t.TempDir()
+	alias := filepath.Join(filepath.Dir(home), filepath.Base(home)+"-link")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Fatal(err)
+	}
+	targets, _ := skillTargets(home, "", "codex", "user")
+	path := targets[0].Path
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	const original = "original instructions\n"
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installSkills(home, targets); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := m.Installs[0]
+	duplicate.Path = filepath.Join(alias, ".codex", "instructions.md")
+	section, err := skillSection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate.OldSection = section
+	duplicate.AddedBlock = ""
+	m.Installs = append(m.Installs, duplicate)
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath(home), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err = readManifest(home)
+	if err != nil || len(m.Installs) != 1 {
+		t.Fatalf("duplicate manifest was not normalized: %+v err=%v", m, err)
+	}
+	if err := uninstallSkills(home, []string{m.Installs[0].Path}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != original {
+		t.Fatalf("original not restored: %q err=%v", got, err)
+	}
+}
+
+func TestSkillPickerSurvivesBlockedClaudeDirectory(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".claude"), []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := allSkillTargets(home, project)
+	if err != nil || len(targets) != 4 {
+		t.Fatalf("picker destinations unavailable: %+v err=%v", targets, err)
+	}
+	screen := renderSkillPicker(home, project, targets, make([]bool, len(targets)), 0, "")
+	if !strings.Contains(screen, "Codex  / User") {
+		t.Fatalf("Codex destination missing: %q", screen)
 	}
 }
 

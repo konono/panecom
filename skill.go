@@ -135,10 +135,12 @@ func readManifest(home string) (skillManifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return m, err
 	}
+	m.Installs = uniqueSkillInstalls(m.Installs)
 	return m, nil
 }
 
 func writeManifest(home string, m skillManifest) error {
+	m.Installs = uniqueSkillInstalls(m.Installs)
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -331,12 +333,26 @@ func installSkills(home string, targets []skillInstall) error {
 }
 
 func findInstall(m skillManifest, path string) int {
+	key := skillPathKey(path)
 	for i, install := range m.Installs {
-		if install.Path == path {
+		if skillPathKey(install.Path) == key {
 			return i
 		}
 	}
 	return -1
+}
+
+func uniqueSkillInstalls(installs []skillInstall) []skillInstall {
+	seen := make(map[string]bool, len(installs))
+	unique := make([]skillInstall, 0, len(installs))
+	for _, install := range installs {
+		key := skillPathKey(install.Path)
+		if !seen[key] {
+			unique = append(unique, install) // The first entry has the original pre-install content.
+			seen[key] = true
+		}
+	}
+	return unique
 }
 
 func matchesInstalled(current string, exists bool, install skillInstall) bool {
@@ -357,10 +373,11 @@ func uninstallSkills(home string, paths []string) error {
 	}
 	selected := make(map[string]bool, len(paths))
 	for _, path := range paths {
-		selected[path] = true
-		if findInstall(manifest, path) < 0 {
+		index := findInstall(manifest, path)
+		if index < 0 {
 			return fmt.Errorf("%s is not tracked as installed", path)
 		}
+		selected[manifest.Installs[index].Path] = true
 	}
 	restored := make(map[string]string, len(paths))
 	var snapshots []fileSnapshot
@@ -478,10 +495,7 @@ func allSkillTargets(home, project string) ([]skillInstall, error) {
 			if err != nil {
 				return nil, err
 			}
-			key, err := canonicalSkillPath(one[0].Path)
-			if err != nil {
-				return nil, err
-			}
+			key := skillPathKey(one[0].Path)
 			if !seen[key] {
 				targets = append(targets, one...)
 				seen[key] = true
@@ -512,6 +526,14 @@ func canonicalSkillPath(path string) (string, error) {
 		missing = append([]string{filepath.Base(dir)}, missing...)
 		dir = parent
 	}
+}
+
+func skillPathKey(path string) string {
+	key, err := canonicalSkillPath(path)
+	if err != nil {
+		return filepath.Clean(path) // Keep other destinations usable when this one is blocked.
+	}
+	return key
 }
 
 func displaySkillPath(target skillInstall) string {
@@ -737,11 +759,7 @@ func untrackedSkills(home, project string, manifest skillManifest) ([]skillInsta
 	seen := map[string]bool{}
 	tracked := map[string]bool{}
 	for _, install := range manifest.Installs {
-		key, err := canonicalSkillPath(install.Path)
-		if err != nil {
-			return nil, err
-		}
-		tracked[key] = true
+		tracked[skillPathKey(install.Path)] = true
 	}
 	for _, scope := range []string{"user", "project"} {
 		targets, err := skillTargets(home, project, "both", scope)
@@ -749,10 +767,7 @@ func untrackedSkills(home, project string, manifest skillManifest) ([]skillInsta
 			return nil, err
 		}
 		for _, target := range targets {
-			key, err := canonicalSkillPath(target.Path)
-			if err != nil {
-				return nil, err
-			}
+			key := skillPathKey(target.Path)
 			if seen[key] || tracked[key] {
 				continue
 			}
