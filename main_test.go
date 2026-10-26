@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -337,10 +338,69 @@ func TestDescribeNamespaceReportsRegisteredAnchor(t *testing.T) {
 	if got := describeNamespace(nsDir); got != "/work/project" {
 		t.Errorf("describeNamespace = %s, want /work/project", got)
 	}
+	if got := namespaceLabel(nsDir); got != "/work/project" {
+		t.Errorf("namespaceLabel = %s, want /work/project", got)
+	}
 
 	empty := t.TempDir()
 	if got := describeNamespace(empty); got != empty {
 		t.Errorf("describeNamespace = %s, want the namespace path %s", got, empty)
+	}
+	if got := namespaceLabel(empty); got != "(unknown)" {
+		t.Errorf("namespaceLabel = %s, want (unknown)", got)
+	}
+}
+
+func TestWhoamiReportsRegisteredPaneAndNamespace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PANECOM_STATE_DIR", filepath.Join(home, "state"))
+	a := filepath.Join(home, "a")
+	b := filepath.Join(home, "b")
+	for _, dir := range []string{a, b} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &fakeMux{pane: "terminal_510"}
+	withFakeMux(t, f)
+	if err := registerPane("d", "terminal_510", resolvedPath(t, a), "fake"); err != nil {
+		t.Fatal(err)
+	}
+
+	capture := func(roleOnly bool) string {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = reader.Close() }()
+		oldStdout := os.Stdout
+		os.Stdout = writer
+		defer func() { os.Stdout = oldStdout }()
+		inDir(t, b, func() { cmdWhoami(roleOnly) })
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		output, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(output)
+	}
+	output := capture(false)
+	want := "role: d\npane: terminal_510\nnamespace: " + resolvedPath(t, a) + "\n"
+	if output != want {
+		t.Fatalf("whoami = %q, want %q", output, want)
+	}
+	if output := capture(true); output != "d\n" {
+		t.Fatalf("whoami --role = %q, want d", output)
+	}
+	nsDir := namespaceDir(sessionRootIn(stateRootFor(a), f.Kind(), "fake"), resolvedPath(t, a))
+	if err := os.Remove(filepath.Join(nsDir, ".cwd")); err != nil {
+		t.Fatal(err)
+	}
+	if output := capture(false); output != "role: d\npane: terminal_510\nnamespace: (unknown)\n" {
+		t.Fatalf("whoami with missing anchor = %q", output)
 	}
 }
 

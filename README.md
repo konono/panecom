@@ -77,7 +77,36 @@ panecom register reviewer
 codex  # または claude 等
 ```
 
+Pane B に移動せずに登録する場合は、Pane A で `panecom register` を実行します。現在のタブ／ウィンドウ内で、矢印キー（または `h`/`j`/`k`/`l`）を使って画面上の上下左右にある pane を選び、Enter、続いて role 名を入力してください。端に着いても選択は飛びません。選んだ pane は Zellij では一時的に色付き、tmux では mark 表示され、画面のプレビューも表示されます。選んだ pane の作業ディレクトリからプロジェクトを判定します。作業ディレクトリを取得できない場合は、プロジェクトのパスも入力します。`Esc` または `q` で選択を中止できます。対象 pane にコマンドは送られませんが、対象プロジェクトの `.panecom/` に登録状態を書き込み（存在しなければ作成）、pane のタイトルを `panecom:<role>` に変更します。別プロジェクトの pane を選ぶと、そのプロジェクトに登録され、呼び出し元からは `panecom link` 後に `<project>/<role>` で参照できます。
+
+Zellij の色は選択画面を閉じると標準色に戻ります。選択前に `set-pane-color` で個別に設定した色は復元されません。
+
+```text
+$ panecom register
+Select a pane  arrows/hjkl: move  Enter: select  Esc/q: cancel
+Tab/window: app  (0)
+
+  [app] terminal_1  claude  /path/to/app
+> [app] terminal_2  codex   /path/to/app
+
+Preview:
+...
+Role name: m
+m -> codex (/path/to/app)
+```
+
 > 両方の pane は **同じセッション内**、**同じプロジェクト** から register してください。これが同じ namespace に所属する条件です。プロジェクトは register 時の作業ディレクトリから遡って判定されるので、リポジトリ内のどのディレクトリで register しても構いません。
+
+登録内容は `panecom whoami` で確認できます。同じプロジェクト内で作業ディレクトリを移動しても、登録時に保存された namespace を表示します。別プロジェクトへ移動し、state store も変わった場合は登録が見つからずエラーになります。従来の role だけの出力をスクリプトで使う場合は `panecom whoami --role` に変更してください。
+
+```text
+$ panecom whoami
+role: reviewer
+pane: terminal_2
+namespace: /path/to/app
+```
+
+以前のバージョンで登録した pane は、サブディレクトリを namespace として記録したままの場合があります。`panecom list` は同じ state store にある生存中の旧登録を検知し、対象 pane で実行する `panecom register <role>`、または同じタブの別 pane から選ぶ `panecom register` を案内します。role の解決に失敗した場合も同じ案内を表示します。検知だけでは登録を変更しません。別の state store に残った登録、および `.git` や `.panecom` のマーカーが無く同じプロジェクトと判定できない登録は検知対象外です。
 
 4. 通信する:
 
@@ -120,8 +149,9 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | コマンド | 説明 |
 |---|---|
 | `[--mux zellij\|tmux]` | マルチプレクサを明示指定（省略時は自動検出） |
+| `register` | pane を画面で選び、role 名を入力して登録 |
 | `register <role>` | 現在の pane を role として登録 |
-| `whoami` | 現在の pane の role を表示 |
+| `whoami [--role]` | 現在の pane の role、pane ID、登録時の namespace を表示（`--role` は role のみ） |
 | `list [--all \| <project>]` | role 一覧を表示（自分 / リンク先 / 全部） |
 | `link [-f] <project> <path>` | 別プロジェクトをリンク（引数なしでリンク一覧） |
 | `unlink <project>` | リンクを削除 |

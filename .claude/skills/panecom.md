@@ -130,7 +130,8 @@ panecom exec --timeout 120 terminal "make build"
 
 ```
 panecom register <role>          # 自分の pane を role として登録
-panecom whoami                   # 自分の role を確認
+panecom whoami                   # 自分の role・pane ID・登録時の namespace を確認
+panecom whoami --role            # role のみを表示（スクリプト向け）
 panecom resolve <role>           # role → pane ID を確認
 panecom dump [--full] <role>     # 対象 pane の画面を取得
 panecom profile [-f] <name>     # config.yaml のプロファイルで環境構築

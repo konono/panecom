@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,7 +46,7 @@ func (t *TmuxMux) ListPanes(sessionName string) ([]Pane, error) {
 			return nil, err
 		}
 	}
-	out, err := t.runner.Output("tmux", "list-panes", "-s", "-t", target, "-F", "#{pane_id}\t#{window_id}\t#{window_name}")
+	out, err := t.runner.Output("tmux", "list-panes", "-s", "-t", target, "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tmux panes: %w", err)
 	}
@@ -54,14 +55,25 @@ func (t *TmuxMux) ListPanes(sessionName string) ([]Pane, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, "\t", 10)
+		if len(parts) < 10 {
 			continue
 		}
+		x, _ := strconv.Atoi(parts[6])
+		y, _ := strconv.Atoi(parts[7])
+		width, _ := strconv.Atoi(parts[8])
+		height, _ := strconv.Atoi(parts[9])
 		panes = append(panes, Pane{
 			ID:      parts[0],
 			TabID:   parts[1],
 			TabName: parts[2],
+			Title:   parts[3],
+			Cwd:     parts[4],
+			Command: parts[5],
+			X:       x,
+			Y:       y,
+			Width:   width,
+			Height:  height,
 		})
 	}
 	return panes, nil

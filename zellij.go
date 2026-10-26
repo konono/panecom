@@ -36,10 +36,17 @@ type zellijRawPane struct {
 	IsPlugin bool   `json:"is_plugin"`
 	TabID    int    `json:"tab_id"`
 	TabName  string `json:"tab_name"`
+	Title    string `json:"title"`
+	Cwd      string `json:"pane_cwd"`
+	Command  string `json:"pane_command"`
+	X        int    `json:"pane_x"`
+	Y        int    `json:"pane_y"`
+	Width    int    `json:"pane_columns"`
+	Height   int    `json:"pane_rows"`
 }
 
 func (z *ZellijMux) ListPanes(_ string) ([]Pane, error) {
-	out, err := z.runner.Output("zellij", "action", "list-panes", "--json", "-t")
+	out, err := z.runner.Output("zellij", "action", "list-panes", "--json", "--all")
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +61,13 @@ func (z *ZellijMux) ListPanes(_ string) ([]Pane, error) {
 				ID:      fmt.Sprintf("terminal_%d", p.ID),
 				TabID:   strconv.Itoa(p.TabID),
 				TabName: p.TabName,
+				Title:   p.Title,
+				Cwd:     p.Cwd,
+				Command: p.Command,
+				X:       p.X,
+				Y:       p.Y,
+				Width:   p.Width,
+				Height:  p.Height,
 			})
 		}
 	}

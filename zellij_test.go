@@ -97,8 +97,8 @@ func TestZellijCurrentPaneID(t *testing.T) {
 
 func TestZellijListPanesCommand(t *testing.T) {
 	r := newFakeRunner()
-	r.Stub([]byte(`[{"id":1,"is_plugin":false,"tab_id":0,"tab_name":"Tab #1"},{"id":2,"is_plugin":true,"tab_id":0,"tab_name":"Tab #1"}]`),
-		"zellij", "action", "list-panes", "--json", "-t")
+	r.Stub([]byte(`[{"id":1,"is_plugin":false,"tab_id":0,"tab_name":"Tab #1","title":"agent","pane_cwd":"/work/repo","pane_command":"codex","pane_x":10,"pane_y":2,"pane_columns":40,"pane_rows":20},{"id":2,"is_plugin":true,"tab_id":0,"tab_name":"Tab #1"}]`),
+		"zellij", "action", "list-panes", "--json", "--all")
 
 	z := &ZellijMux{runner: r}
 	panes, err := z.ListPanes("")
@@ -114,12 +114,18 @@ func TestZellijListPanesCommand(t *testing.T) {
 	if panes[0].TabID != "0" {
 		t.Errorf("expected tab_id '0', got '%s'", panes[0].TabID)
 	}
+	if panes[0].Title != "agent" || panes[0].Cwd != "/work/repo" || panes[0].Command != "codex" {
+		t.Errorf("missing pane metadata: %+v", panes[0])
+	}
+	if panes[0].X != 10 || panes[0].Y != 2 || panes[0].Width != 40 || panes[0].Height != 20 {
+		t.Errorf("missing pane geometry: %+v", panes[0])
+	}
 
 	call := r.findCall("zellij", "list-panes")
 	if call == nil {
 		t.Fatal("expected zellij action list-panes call")
 	}
-	expected := []string{"action", "list-panes", "--json", "-t"}
+	expected := []string{"action", "list-panes", "--json", "--all"}
 	if strings.Join(call.Args, " ") != strings.Join(expected, " ") {
 		t.Errorf("expected args %v, got %v", expected, call.Args)
 	}
@@ -244,7 +250,7 @@ func TestZellijNewPaneInTabCommand(t *testing.T) {
 func TestZellijPaneExists(t *testing.T) {
 	r := newFakeRunner()
 	r.Stub([]byte(`[{"id":5,"is_plugin":false,"tab_id":0,"tab_name":"Tab"},{"id":7,"is_plugin":false,"tab_id":0,"tab_name":"Tab"}]`),
-		"zellij", "action", "list-panes", "--json", "-t")
+		"zellij", "action", "list-panes", "--json", "--all")
 
 	z := &ZellijMux{runner: r}
 	exists, err := z.PaneExists("", "terminal_5")
@@ -257,7 +263,7 @@ func TestZellijPaneExists(t *testing.T) {
 
 	r.calls = nil
 	r.Stub([]byte(`[{"id":5,"is_plugin":false,"tab_id":0,"tab_name":"Tab"}]`),
-		"zellij", "action", "list-panes", "--json", "-t")
+		"zellij", "action", "list-panes", "--json", "--all")
 	exists, err = z.PaneExists("", "terminal_99")
 	if err != nil {
 		t.Fatal(err)
@@ -271,14 +277,14 @@ func TestZellijNewTabCommand(t *testing.T) {
 	r := newFakeRunner()
 
 	r.Stub([]byte(`[{"id":1,"is_plugin":false,"tab_id":0,"tab_name":"Tab #1"}]`),
-		"zellij", "action", "list-panes", "--json", "-t")
+		"zellij", "action", "list-panes", "--json", "--all")
 
 	r.Stub([]byte("1\n"), "zellij", "action", "new-tab", "--name", "dev", "--cwd", "/work")
 
 	callCount := 0
-	origStub := r.stubs[r.stubKey("zellij", "action", "list-panes", "--json", "-t")]
-	r.stubs[r.stubKey("zellij", "action", "list-panes", "--json", "-t")] = fakeStub{}
-	delete(r.stubs, r.stubKey("zellij", "action", "list-panes", "--json", "-t"))
+	origStub := r.stubs[r.stubKey("zellij", "action", "list-panes", "--json", "--all")]
+	r.stubs[r.stubKey("zellij", "action", "list-panes", "--json", "--all")] = fakeStub{}
+	delete(r.stubs, r.stubKey("zellij", "action", "list-panes", "--json", "--all"))
 
 	r2 := &fakeRunnerWithListPanesCounting{
 		inner:     r,

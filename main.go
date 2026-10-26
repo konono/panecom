@@ -289,6 +289,15 @@ func describeNamespace(nsDir string) string {
 	return nsDir
 }
 
+// namespaceLabel is for human-facing output. Keep describeNamespace's path
+// fallback for errors, where the path helps diagnose a damaged state store.
+func namespaceLabel(nsDir string) string {
+	if anchor, err := readFile(filepath.Join(nsDir, ".cwd")); err == nil && anchor != "" {
+		return anchor
+	}
+	return "(unknown)"
+}
+
 func resolveRole(nsDir, role string) (string, error) {
 	path := filepath.Join(nsDir, "roles", role)
 	paneID, err := readFile(path)
@@ -332,17 +341,30 @@ func sendToPane(paneID, message string) error {
 
 func cmdRegister(role string) {
 	validateRole(role)
-	session, sRoot := requireSession()
+	session, _ := requireSession()
 	paneID := requirePaneID()
-	anchor := namespaceAnchor()
+	if err := registerPane(role, paneID, namespaceAnchor(), session); err != nil {
+		die(err.Error())
+	}
+	fmt.Println(role)
+}
+
+// registerPane writes a pane mapping in the store for the selected project's
+// anchor. Keeping this separate from cmdRegister lets the interactive picker
+// register another pane without sending text to whatever runs inside it.
+func registerPane(role, paneID, anchor, session string) error {
+	if !rolePattern.MatchString(role) {
+		return fmt.Errorf("invalid role name '%s' (must match [A-Za-z0-9][A-Za-z0-9._-]*)", role)
+	}
+	sRoot := sessionRootIn(stateRootFor(anchor), mux.Kind(), session)
 	anchorHash := hashString(anchor)
 	nsDir := namespaceDir(sRoot, anchor)
 
 	if err := atomicWrite(filepath.Join(sRoot, ".session"), session); err != nil {
-		die("failed to write session state: " + err.Error())
+		return fmt.Errorf("failed to write session state: %w", err)
 	}
 	if err := atomicWrite(filepath.Join(nsDir, ".cwd"), anchor); err != nil {
-		die("failed to write namespace state: " + err.Error())
+		return fmt.Errorf("failed to write namespace state: %w", err)
 	}
 
 	prevNsDir, err := namespaceForCurrentPane(sRoot, paneID)
@@ -363,15 +385,14 @@ func cmdRegister(role string) {
 	}
 
 	if err := atomicWrite(filepath.Join(nsDir, "roles", role), paneID); err != nil {
-		die("failed to write role: " + err.Error())
+		return fmt.Errorf("failed to write role: %w", err)
 	}
 	if err := atomicWrite(filepath.Join(sRoot, "panes", paneID), anchorHash); err != nil {
-		die("failed to write pane mapping: " + err.Error())
+		return fmt.Errorf("failed to write pane mapping: %w", err)
 	}
 
 	_ = mux.RenamePane(paneID, fmt.Sprintf("panecom:%s", role))
-
-	fmt.Println(role)
+	return nil
 }
 
 func cmdOpen(role string, direction string, binPath string) {
@@ -397,7 +418,7 @@ func cmdOpen(role string, direction string, binPath string) {
 	fmt.Println(newPaneID)
 }
 
-func cmdWhoami() {
+func cmdWhoami(roleOnly bool) {
 	_, sRoot := requireSession()
 	paneID := requirePaneID()
 
@@ -414,7 +435,11 @@ func cmdWhoami() {
 	for _, e := range entries {
 		content, _ := readFile(filepath.Join(nsDir, "roles", e.Name()))
 		if content == paneID {
-			fmt.Println(e.Name())
+			if roleOnly {
+				fmt.Println(e.Name())
+				return
+			}
+			fmt.Printf("role: %s\npane: %s\nnamespace: %s\n", e.Name(), paneID, namespaceLabel(nsDir))
 			return
 		}
 	}
@@ -448,6 +473,9 @@ func resolveRoleForCommand(qualified string) string {
 
 	targetPaneID, err := resolveRole(nsDir, role)
 	if err != nil {
+		if alias == "" {
+			warnLegacyRegistrations(os.Stderr, sRoot, session, namespaceAnchor())
+		}
 		die(fmt.Sprintf("role '%s' is not registered in namespace %s", role, where))
 	}
 
@@ -631,8 +659,9 @@ func cmdList(alias string, all bool) {
 	}
 
 	own := filepath.Join(sRoot, "namespaces", nsHash)
-	fmt.Println(describeNamespace(own))
+	fmt.Println(namespaceLabel(own))
 	printRoles(listRoles(session, own))
+	warnLegacyRegistrations(os.Stderr, sRoot, session, namespaceAnchor())
 
 	if !all {
 		return
@@ -1524,8 +1553,11 @@ func usage() {
   panecom [--mux zellij|tmux] <command> [args...]
 
 Commands:
+  register                       Choose a pane and role interactively
+                                 Arrows: move by pane layout in this tab
   register <role>                Register current pane as <role>
-  whoami                         Show current pane's role
+  whoami [--role]                Show current role, pane ID, and namespace
+                                 --role prints only the role for scripts
   list [--all | <project>]       List roles here, or in a linked project
   link [-f] <project> <path>     Link a project so its roles can be addressed
                                  as <project>/<role>; no args lists links
@@ -1589,15 +1621,19 @@ func main() {
 
 	switch args[0] {
 	case "register":
-		if len(args) != 2 {
+		switch len(args) {
+		case 1:
+			cmdRegisterInteractive()
+		case 2:
+			cmdRegister(args[1])
+		default:
 			usage()
 		}
-		cmdRegister(args[1])
 	case "whoami":
-		if len(args) != 1 {
+		if len(args) > 2 || len(args) == 2 && args[1] != "--role" {
 			usage()
 		}
-		cmdWhoami()
+		cmdWhoami(len(args) == 2)
 	case "link":
 		force := false
 		positional := []string{}
