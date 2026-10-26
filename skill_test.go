@@ -115,7 +115,7 @@ func TestSkillInstallAdoptsMatchingScriptDeployment(t *testing.T) {
 	}
 	manifest, _ := readManifest(home)
 	for _, install := range manifest.Installs {
-		if !install.Adopted {
+		if !install.Adopted || !install.Existed {
 			t.Fatalf("existing script deployment was not adopted: %+v", install)
 		}
 	}
@@ -123,9 +123,109 @@ func TestSkillInstallAdoptsMatchingScriptDeployment(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, target := range targets {
-		if _, err := os.Stat(target.Path); !os.IsNotExist(err) {
-			t.Fatalf("adopted install remains at %s: %v", target.Path, err)
+		got, err := os.ReadFile(target.Path)
+		want := embeddedSkill
+		if target.Agent == "codex" {
+			want = section + "\n"
 		}
+		if err != nil || string(got) != want {
+			t.Fatalf("adopted file changed at %s: %q %v", target.Path, got, err)
+		}
+	}
+}
+
+func TestSkillUninstallPreservesAdoptedFileFromOlderManifest(t *testing.T) {
+	home := t.TempDir()
+	targets, _ := skillTargets(home, "", "claude", "user")
+	path := targets[0].Path
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(embeddedSkill), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeManifest(home, skillManifest{Installs: []skillInstall{{Agent: "claude", Scope: "user", Path: path, Installed: contentHash(embeddedSkill), Adopted: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := uninstallSkills(home, []string{path}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != embeddedSkill {
+		t.Fatalf("adopted file lost: %q %v", got, err)
+	}
+}
+
+func TestSkillInstallPreservesPrivateFileMode(t *testing.T) {
+	home := t.TempDir()
+	targets, _ := skillTargets(home, "", "codex", "user")
+	path := targets[0].Path
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("private instructions\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	checkMode := func() {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("mode=%v", info.Mode())
+		}
+	}
+	if err := installSkills(home, targets); err != nil {
+		t.Fatal(err)
+	}
+	checkMode()
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uninstallSkills(home, []string{path}); err != nil {
+		t.Fatal(err)
+	}
+	checkMode()
+}
+
+func TestSkillUninstallPrunesMissingTarget(t *testing.T) {
+	home := t.TempDir()
+	a, b := t.TempDir(), t.TempDir()
+	ta, _ := skillTargets(home, a, "codex", "project")
+	tb, _ := skillTargets(home, b, "codex", "project")
+	if err := installSkills(home, append(ta, tb...)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ta[0].Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := uninstallSkills(home, []string{ta[0].Path, tb[0].Path}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tb[0].Path); !os.IsNotExist(err) {
+		t.Fatalf("remaining target not removed: %v", err)
+	}
+	m, err := readManifest(home)
+	if err != nil || len(m.Installs) != 0 {
+		t.Fatalf("manifest=%+v err=%v", m, err)
+	}
+}
+
+func TestSkillReinstallRejectsMalformedAddedBlock(t *testing.T) {
+	home := t.TempDir()
+	targets, _ := skillTargets(home, "", "codex", "user")
+	if err := installSkills(home, targets); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Installs[0].AddedBlock = "junk-without-marker"
+	if err := writeManifest(home, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := installSkills(home, targets); err == nil || !strings.Contains(err.Error(), "missing start marker") {
+		t.Fatalf("expected validation error, got %v", err)
 	}
 }
 
@@ -190,6 +290,33 @@ func TestSkillPickerShowsDirectoryPresence(t *testing.T) {
 	}
 	if !strings.Contains(screen, "Codex settings:  not found: "+filepath.Join(home, ".codex")) {
 		t.Fatalf("Codex absence missing from picker: %q", screen)
+	}
+}
+
+func TestSkillPickerWarnsBeforeReplacingClaudeFile(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	targets, err := allSkillTargets(home, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := targets[0].Path
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("custom skill"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	screen := renderSkillPicker(home, project, targets, make([]bool, len(targets)), 0, "")
+	if !strings.Contains(screen, "existing file will be replaced") {
+		t.Fatalf("replacement warning missing: %q", screen)
+	}
+}
+
+func TestAllSkillTargetsDeduplicatesHomeProject(t *testing.T) {
+	home := t.TempDir()
+	targets, err := allSkillTargets(home, home)
+	if err != nil || len(targets) != 3 {
+		t.Fatalf("targets=%+v err=%v", targets, err)
 	}
 }
 

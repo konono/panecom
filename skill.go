@@ -34,6 +34,7 @@ type skillInstall struct {
 	OldSection string `json:"old_section,omitempty"`
 	AddedBlock string `json:"added_block,omitempty"`
 	Adopted    bool   `json:"adopted,omitempty"`
+	Mode       uint32 `json:"mode,omitempty"`
 }
 
 type skillManifest struct {
@@ -44,11 +45,12 @@ type fileSnapshot struct {
 	path    string
 	content string
 	exists  bool
+	mode    os.FileMode
 }
 
 func restoreSnapshot(snapshot fileSnapshot) error {
 	if snapshot.exists {
-		return atomicWrite(snapshot.path, snapshot.content)
+		return writeSkillFile(snapshot.path, snapshot.content, snapshot.mode)
 	}
 	if err := os.Remove(snapshot.path); err != nil && !os.IsNotExist(err) {
 		return err
@@ -208,6 +210,41 @@ func readOptional(path string) (string, bool, error) {
 	return string(data), true, nil
 }
 
+func skillFileMode(path string, exists bool) (os.FileMode, error) {
+	if !exists {
+		return 0644, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Mode().Perm(), nil
+}
+
+func writeSkillFile(path, content string, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".panecom-skill-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := io.WriteString(tmp, content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 func installSkills(home string, targets []skillInstall) error {
 	manifest, err := readManifest(home)
 	if err != nil {
@@ -225,7 +262,11 @@ func installSkills(home string, targets []skillInstall) error {
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", target.Path, err)
 		}
-		snapshots = append(snapshots, fileSnapshot{target.Path, current, exists})
+		mode, err := skillFileMode(target.Path, exists)
+		if err != nil {
+			return fmt.Errorf("checking %s: %w", target.Path, err)
+		}
+		snapshots = append(snapshots, fileSnapshot{target.Path, current, exists, mode})
 		if index := findInstall(manifest, target.Path); index >= 0 {
 			prior := manifest.Installs[index]
 			if prior.Agent != target.Agent || prior.Scope != target.Scope {
@@ -237,13 +278,12 @@ func installSkills(home string, targets []skillInstall) error {
 			target = prior // Keep the original content for uninstall.
 		} else {
 			target.Existed = exists
+			target.Mode = uint32(mode)
 			if target.Agent == "claude" {
 				if current == embeddedSkill {
 					target.Adopted = true
-					target.Existed = false
-				} else {
-					target.Previous = current
 				}
+				target.Previous = current
 			}
 		}
 		if target.Agent == "claude" {
@@ -259,14 +299,15 @@ func installSkills(home string, targets []skillInstall) error {
 				target.OldSection, target.AddedBlock = oldSection, addedBlock
 				if oldSection == section {
 					target.Adopted = true
-					if strings.TrimSpace(strings.Replace(current, section, "", 1)) == "" {
-						target.Existed = false
-					}
 				}
 			} else if target.AddedBlock != "" {
 				// Reinstallation may change the embedded section, so refresh the
 				// block to remove while keeping the original separator.
-				prefix := target.AddedBlock[:strings.Index(target.AddedBlock, skillStart)]
+				marker := strings.Index(target.AddedBlock, skillStart)
+				if marker < 0 {
+					return fmt.Errorf("invalid installed block for %s: missing start marker", target.Path)
+				}
+				prefix := target.AddedBlock[:marker]
 				target.AddedBlock = prefix + section + "\n"
 			}
 			target.Installed = contentHash(section)
@@ -274,7 +315,7 @@ func installSkills(home string, targets []skillInstall) error {
 		planned = append(planned, target)
 	}
 	for i, target := range planned {
-		if err := atomicWrite(target.Path, contents[i]); err != nil {
+		if err := writeSkillFile(target.Path, contents[i], snapshots[i].mode); err != nil {
 			return rollbackError(fmt.Errorf("installing %s: %w", target.Path, err), snapshots[:i])
 		}
 		if index := findInstall(manifest, target.Path); index >= 0 {
@@ -331,23 +372,28 @@ func uninstallSkills(home string, paths []string) error {
 		if err != nil {
 			return err
 		}
-		snapshots = append(snapshots, fileSnapshot{install.Path, current, exists})
+		mode, err := skillFileMode(install.Path, exists)
+		if err != nil {
+			return err
+		}
+		snapshots = append(snapshots, fileSnapshot{install.Path, current, exists, mode})
+		if !exists {
+			continue // The target was removed separately; discard its tracking record.
+		}
 		if !matchesInstalled(current, exists, install) {
 			return fmt.Errorf("%s changed since installation; inspect it before uninstalling", install.Path)
 		}
 		if install.Agent == "claude" {
-			restored[install.Path] = install.Previous
+			if install.Adopted && install.Previous == "" {
+				restored[install.Path] = current // Older manifests did not save adopted content.
+			} else {
+				restored[install.Path] = install.Previous
+			}
 		} else if install.AddedBlock != "" {
 			if !strings.Contains(current, install.AddedBlock) {
 				return fmt.Errorf("%s no longer contains the installed block", install.Path)
 			}
 			restored[install.Path] = strings.Replace(current, install.AddedBlock, "", 1)
-		} else if install.Adopted {
-			start, end, _ := sectionBounds(current)
-			restored[install.Path] = current[:start] + current[end:]
-			if strings.TrimSpace(restored[install.Path]) == "" {
-				restored[install.Path] = ""
-			}
 		} else {
 			start, end, _ := sectionBounds(current)
 			restored[install.Path] = current[:start] + install.OldSection + current[end:]
@@ -358,11 +404,15 @@ func uninstallSkills(home string, paths []string) error {
 		if !selected[install.Path] {
 			continue
 		}
-		if !install.Existed && restored[install.Path] == "" {
+		if !snapshots[changed].exists {
+			changed++
+			continue
+		}
+		if !install.Existed && !install.Adopted && restored[install.Path] == "" {
 			if err := os.Remove(install.Path); err != nil {
 				return rollbackError(err, snapshots[:changed])
 			}
-		} else if err := atomicWrite(install.Path, restored[install.Path]); err != nil {
+		} else if err := writeSkillFile(install.Path, restored[install.Path], restoredSkillMode(install, snapshots[changed].mode)); err != nil {
 			return rollbackError(err, snapshots[:changed])
 		}
 		changed++
@@ -378,6 +428,13 @@ func uninstallSkills(home string, paths []string) error {
 		return rollbackError(fmt.Errorf("saving skill installations: %w", err), snapshots)
 	}
 	return nil
+}
+
+func restoredSkillMode(install skillInstall, current os.FileMode) os.FileMode {
+	if install.Mode != 0 {
+		return os.FileMode(install.Mode)
+	}
+	return current // Older manifests have no saved mode.
 }
 
 func promptChoice(in *bufio.Reader, out io.Writer, label string, choices map[string]string) (string, error) {
@@ -414,13 +471,17 @@ func agentDirectoryLabel(path string) string {
 
 func allSkillTargets(home, project string) ([]skillInstall, error) {
 	var targets []skillInstall
+	seen := map[string]bool{}
 	for _, agent := range []string{"claude", "codex"} {
 		for _, scope := range []string{"user", "project"} {
 			one, err := skillTargets(home, project, agent, scope)
 			if err != nil {
 				return nil, err
 			}
-			targets = append(targets, one...)
+			if !seen[one[0].Path] {
+				targets = append(targets, one...)
+				seen[one[0].Path] = true
+			}
 		}
 	}
 	return targets, nil
@@ -465,7 +526,13 @@ func renderSkillPicker(home, project string, targets []skillInstall, checked []b
 		if target.Scope == "project" {
 			scope = "Project"
 		}
-		fmt.Fprintf(&b, "%s [%s] %-6s / %-7s  %s\r\n", pointer, mark, label, scope, displaySkillPath(target))
+		warning := ""
+		if target.Agent == "claude" {
+			if current, exists, err := readOptional(target.Path); err == nil && exists && current != embeddedSkill {
+				warning = "  [existing file will be replaced; restored on uninstall]"
+			}
+		}
+		fmt.Fprintf(&b, "%s [%s] %-6s / %-7s  %s%s\r\n", pointer, mark, label, scope, displaySkillPath(target), warning)
 	}
 	pointer := " "
 	if cursor == len(targets) {
@@ -486,6 +553,11 @@ func readSkillKey(in io.Reader) (byte, error) {
 	if b[0] != 27 {
 		return b[0], nil
 	}
+	return readEscapeKey(in)
+}
+
+func readEscapeKey(in io.Reader) (byte, error) {
+	var b [1]byte
 	ready, err := inputReady(in, escapeSequenceTimeoutMS)
 	if err != nil || !ready {
 		return 27, err
@@ -710,11 +782,20 @@ func cmdSkillUninstall() error {
 	if err != nil || confirm != "yes" {
 		return err
 	}
+	missing := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		_, err := os.Stat(path)
+		missing[path] = os.IsNotExist(err)
+	}
 	if err := uninstallSkills(home, paths); err != nil {
 		return err
 	}
 	for _, path := range paths {
-		fmt.Println("Uninstalled " + path)
+		if missing[path] {
+			fmt.Println("Removed missing installation record: " + path)
+		} else {
+			fmt.Println("Uninstalled " + path)
+		}
 	}
 	return nil
 }

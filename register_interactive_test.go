@@ -51,6 +51,8 @@ func TestPromptRoleCompletion(t *testing.T) {
 		{"prefix", "rev\t\r", "reviewer", true},
 		{"backspace", "reviewx\x7fer\t\r", "reviewer", true},
 		{"custom role", "architect\r", "architect", true},
+		{"left arrow edits in place", "revieer\x1b[D\x1b[Dw\r", "reviewer", true},
+		{"up arrow keeps prompt", "rev\x1b[A\t\r", "reviewer", true},
 		{"cancel", "\x1b", "", false},
 	}
 	for _, tt := range tests {

@@ -445,7 +445,7 @@ panecom skill install
 # > [ Install selected (2) ]
 ```
 
-選択した配布先は `~/.config/panecom/skill-installs.json` に記録されます。次のコマンドで確認・解除できます。`list` は従来のスクリプトなどで入れた配布先も、現在の user/project で見つかる範囲は `untracked` と表示します。同じ内容の既存配布を選んで install すると管理対象として引き継ぎ、uninstall で外せます。独自に編集された既存ファイルは install 前の内容を保存して復元します。uninstall は後から skill 本体が編集されていた場合、保護のため中止します。
+選択した配布先は `~/.config/panecom/skill-installs.json` に記録されます。次のコマンドで確認・解除できます。`list` は従来のスクリプトなどで入れた配布先も、現在の user/project で見つかる範囲は `untracked` と表示します。同じ内容の既存配布を選んで install すると管理対象として引き継ぎ、uninstall 時は元からあったファイルを残します。独自に編集された既存ファイルは install 前の内容と権限を保存して復元します。Claude の既存ファイルは install 時に全文を置き換えるため、選択画面にその旨を表示します。配布先がすでに削除されている場合は追跡記録だけを解除します。uninstall は後から skill 本体が編集されていた場合、保護のため中止します。
 
 ```bash
 panecom skill list

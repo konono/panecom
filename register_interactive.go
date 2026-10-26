@@ -141,10 +141,14 @@ func promptRoleTTY(tty *os.File, reader *bufio.Reader) (string, bool, error) {
 func promptRole(in io.Reader, out io.Writer) (string, bool, error) {
 	const label = "Role name (Tab: developer/reviewer): "
 	var value string
+	cursor := 0
 	var prefix string
 	match := -1
 	redraw := func() error {
 		_, err := fmt.Fprintf(out, "\r\x1b[2K%s%s", label, value)
+		if err == nil && cursor < len(value) {
+			_, err = fmt.Fprintf(out, "\x1b[%dD", len(value)-cursor)
+		}
 		return err
 	}
 	if err := redraw(); err != nil {
@@ -161,9 +165,28 @@ func promptRole(in io.Reader, out io.Writer) (string, bool, error) {
 				return "", false, err
 			}
 			return value, true, nil
-		case 27, 3:
+		case 3:
 			_, _ = fmt.Fprint(out, "\r\n")
 			return "", false, nil
+		case 27:
+			key, err := readEscapeKey(in)
+			if err != nil {
+				return "", false, err
+			}
+			if key == 27 {
+				_, _ = fmt.Fprint(out, "\r\n")
+				return "", false, nil
+			}
+			switch key {
+			case 'D':
+				if cursor > 0 {
+					cursor--
+				}
+			case 'C':
+				if cursor < len(value) {
+					cursor++
+				}
+			}
 		case '\t':
 			if match < 0 {
 				prefix = value
@@ -172,21 +195,25 @@ func promptRole(in io.Reader, out io.Writer) (string, bool, error) {
 				candidate := (match + i) % len(suggestedRoles)
 				if strings.HasPrefix(suggestedRoles[candidate], prefix) {
 					value = suggestedRoles[candidate]
+					cursor = len(value)
 					match = candidate
 					break
 				}
 			}
 		case 127, 8:
-			if len(value) > 0 {
-				value = value[:len(value)-1]
+			if cursor > 0 {
+				value = value[:cursor-1] + value[cursor:]
+				cursor--
 			}
 			match = -1
 		case 21: // Ctrl+U clears the input.
 			value = ""
+			cursor = 0
 			match = -1
 		default:
 			if b[0] >= 32 && b[0] < 127 {
-				value += string(b[0])
+				value = value[:cursor] + string(b[0]) + value[cursor:]
+				cursor++
 				match = -1
 			}
 		}
