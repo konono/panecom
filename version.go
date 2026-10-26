@@ -1,6 +1,6 @@
 package main
 
 // x-release-please-start-version
-var Version = "2.0.1"
+var Version = "2.1.0"
 
 // x-release-please-end

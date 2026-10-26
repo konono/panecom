@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.1.0](https://github.com/konono/panecom/compare/v2.0.1...v2.1.0) (2026-10-26)
+
+
+### Features
+
+* add tell for messages between registered roles ([7b0d9ac](https://github.com/konono/panecom/commit/7b0d9ac664b57b6e0a5e5caab0bfc4f3b20a427c))
+* add tell for messages between registered roles ([2ec4e88](https://github.com/konono/panecom/commit/2ec4e8888193de2d4be7981359457896d027ea2c)), closes [#23](https://github.com/konono/panecom/issues/23)
+* hide stale roles, add cleanup and focus commands ([033a1ac](https://github.com/konono/panecom/commit/033a1accb7b59f87e7e50ff78ea16659d63d0e68))
+* hide stale roles, add cleanup and focus commands ([9c2b5e2](https://github.com/konono/panecom/commit/9c2b5e23772f3850ba491a984a26fa2d99e09f40))
+
+
+### Bug Fixes
+
+* make a cross-project tell answerable ([77d62f3](https://github.com/konono/panecom/commit/77d62f37228cb4ff9d547419fba01aeba23fea1b))
+* make the reply address readable and refuse when it is missing ([8cc833f](https://github.com/konono/panecom/commit/8cc833fcc041beb3ed281a257c822d1e96a5e08c))
+* satisfy errcheck and ineffassign ([2af3f99](https://github.com/konono/panecom/commit/2af3f99af33c9d9b176f8176dd17935943e1b7c9))
+* treat an empty pane list as unreadable, not as no panes ([f63940c](https://github.com/konono/panecom/commit/f63940cbabb11dfdc02515a91e13f27059525b1b))
+
 ## [2.0.1](https://github.com/konono/panecom/compare/v2.0.0...v2.0.1) (2026-10-26)
 
 
