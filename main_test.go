@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -620,6 +622,245 @@ func TestUnlinkRejectsAliasThatEscapesTheLinksDirectory(t *testing.T) {
 	})
 }
 
+func TestPrintRolesHidesStaleUnlessAsked(t *testing.T) {
+	entries := []roleEntry{
+		{Role: "impl", PaneID: "p1", State: paneAlive},
+		{Role: "rev", PaneID: "p2", State: paneDead},
+		{Role: "qa", PaneID: "p3", State: paneDead},
+		{Role: "ops", PaneID: "p4", State: paneUnknown},
+	}
+
+	var out bytes.Buffer
+	printRoles(&out, entries, false)
+	got := out.String()
+	if strings.Contains(got, "rev") || strings.Contains(got, "qa") {
+		t.Errorf("stale roles should be hidden by default, got:\n%s", got)
+	}
+	if !strings.Contains(got, "2 stale entries hidden") {
+		t.Errorf("hidden stale roles should be counted, got:\n%s", got)
+	}
+	// An unanswered check is not the same as a closed pane, so it stays
+	// visible: hiding it would report a working role as simply absent.
+	if !strings.Contains(got, "ops") || !strings.Contains(got, "(unknown)") {
+		t.Errorf("unchecked roles should stay visible, got:\n%s", got)
+	}
+
+	out.Reset()
+	printRoles(&out, entries, true)
+	got = out.String()
+	for _, want := range []string{"rev", "qa", "(stale)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("--stale output should contain %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "hidden") {
+		t.Errorf("--stale should hide nothing, got:\n%s", got)
+	}
+}
+
+func TestPrintRolesCountsOneStaleEntryInSingular(t *testing.T) {
+	var out bytes.Buffer
+	printRoles(&out, []roleEntry{{Role: "rev", PaneID: "p2", State: paneDead}}, false)
+	if got := out.String(); !strings.Contains(got, "1 stale entry hidden") {
+		t.Errorf("want singular wording, got:\n%s", got)
+	}
+}
+
+func TestCleanupRemovesOnlyDeadRoles(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		f.pane = "p_dead"
+		cmdRegister("rev")
+		f.pane = "p_unsure"
+		cmdRegister("qa")
+		f.pane = "pa"
+
+		f.dead = map[string]bool{"p_dead": true}
+		f.unchecked = map[string]bool{"p_unsure": true}
+
+		_, sRoot := requireSession()
+		nsDir := namespaceDir(sRoot, anchorFrom(t, a))
+
+		removed, _ := cleanupNamespace("fake", nsDir, true)
+		if len(removed) != 1 || removed[0].Role != "rev" {
+			t.Fatalf("dry run should report only the dead role, got %+v", removed)
+		}
+		if _, err := resolveRole(nsDir, "rev"); err != nil {
+			t.Error("dry run must not delete anything")
+		}
+
+		removed, unknown := cleanupNamespace("fake", nsDir, false)
+		if len(removed) != 1 || removed[0].Role != "rev" {
+			t.Fatalf("cleanup removed %+v, want only rev", removed)
+		}
+		if unknown != 1 {
+			t.Errorf("unknown = %d, want 1 (qa could not be checked)", unknown)
+		}
+		if _, err := resolveRole(nsDir, "rev"); err == nil {
+			t.Error("the dead role should be gone")
+		}
+		// The pane record is what makes a pane findable again; leaving it
+		// behind would keep the retired pane half-registered.
+		if _, err := os.Stat(filepath.Join(sRoot, "panes", "p_dead")); err == nil {
+			t.Error("the dead pane's record should be gone")
+		}
+		if _, err := resolveRole(nsDir, "qa"); err != nil {
+			t.Error("a role that could not be checked must survive cleanup")
+		}
+		if _, err := resolveRole(nsDir, "d"); err != nil {
+			t.Error("a live role must survive cleanup")
+		}
+	})
+}
+
+func TestCleanupKeepsEverythingWhenTheMultiplexerIsSilent(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		// The failure mode worth guarding: one failed list-panes makes every
+		// pane look gone, and retiring on that wipes the whole session.
+		f.unchecked = map[string]bool{"pa": true}
+		_, sRoot := requireSession()
+		nsDir := namespaceDir(sRoot, anchorFrom(t, a))
+
+		removed, unknown := cleanupNamespace("fake", nsDir, false)
+		if len(removed) != 0 {
+			t.Errorf("nothing should be removed, got %+v", removed)
+		}
+		if unknown != 1 {
+			t.Errorf("unknown = %d, want 1", unknown)
+		}
+		if _, err := resolveRole(nsDir, "d"); err != nil {
+			t.Error("the role must survive an unanswered liveness check")
+		}
+	})
+}
+
+// seedSession writes the marker that names a session directory, the way
+// registering inside that session would.
+func seedSession(t *testing.T, store, kind, name string) string {
+	t.Helper()
+	dir := sessionRootIn(store, kind, name)
+	if err := atomicWrite(filepath.Join(dir, ".session"), name); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestDeadSessionDirsFindsOnlySessionsThatAreGone(t *testing.T) {
+	a, _, f := twoProjects(t)
+	f.sessions = []string{"fake", "still-running"}
+
+	inDir(t, a, func() {
+		store := stateRoot()
+		current := seedSession(t, store, "fake", "fake")
+		live := seedSession(t, store, "fake", "still-running")
+		gone := seedSession(t, store, "fake", "restarted-away")
+		// A directory keyed for the other multiplexer cannot be judged from
+		// here, so it is left alone rather than guessed about.
+		other := seedSession(t, store, "tmux", "some-tmux-session")
+
+		dead, err := deadSessionDirs(store, "fake")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dead) != 1 || dead[0].name != "restarted-away" || dead[0].dir != gone {
+			t.Fatalf("dead = %+v, want only restarted-away", dead)
+		}
+		for _, keep := range []string{current, live, other} {
+			if _, err := os.Stat(keep); err != nil {
+				t.Errorf("deadSessionDirs must not touch %s", keep)
+			}
+		}
+	})
+}
+
+func TestDeadSessionDirsKeepsTheCurrentSessionEvenIfUnlisted(t *testing.T) {
+	a, _, f := twoProjects(t)
+	// A multiplexer that forgot to mention us is not a reason to delete the
+	// state this very command is using.
+	f.sessions = []string{"something-else"}
+
+	inDir(t, a, func() {
+		store := stateRoot()
+		seedSession(t, store, "fake", "fake")
+		dead, err := deadSessionDirs(store, "fake")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range dead {
+			if d.name == "fake" {
+				t.Fatal("the current session must never be reported as dead")
+			}
+		}
+	})
+}
+
+func TestDeadSessionDirsReportsAnUnreadableSessionList(t *testing.T) {
+	a, _, f := twoProjects(t)
+	f.sessionsErr = fmt.Errorf("list-sessions failed")
+
+	inDir(t, a, func() {
+		store := stateRoot()
+		seedSession(t, store, "fake", "restarted-away")
+		dead, err := deadSessionDirs(store, "fake")
+		if err == nil {
+			t.Fatal("want an error when the session list cannot be read")
+		}
+		if len(dead) != 0 {
+			t.Errorf("nothing may be reported as dead without a session list, got %+v", dead)
+		}
+	})
+}
+
+func TestCleanupRemovesDeadSessionDirectories(t *testing.T) {
+	a, _, f := twoProjects(t)
+	f.sessions = []string{"fake"}
+
+	inDir(t, a, func() {
+		store := stateRoot()
+		gone := seedSession(t, store, "fake", "restarted-away")
+		if err := atomicWrite(filepath.Join(gone, "namespaces", "deadbeef", "roles", "d"), "terminal_1"); err != nil {
+			t.Fatal(err)
+		}
+
+		cmdCleanup(false, true)
+		if _, err := os.Stat(gone); err != nil {
+			t.Fatal("a dry run must not delete the session directory")
+		}
+
+		cmdCleanup(false, false)
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("the dead session directory should be gone, stat err = %v", err)
+		}
+		// The session we are in keeps its state.
+		if _, err := resolveRole(namespaceDir(sessionRootIn(store, "fake", "fake"), anchorFrom(t, a)), "d"); err != nil {
+			t.Errorf("the current session's roles must survive: %v", err)
+		}
+	})
+}
+
+func TestFocusTargetsTheRolesPane(t *testing.T) {
+	a, b, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		cmdFocus("d")
+		if f.focused != "pa" {
+			t.Errorf("focused = %q, want pa", f.focused)
+		}
+		// Qualified roles resolve the same way they do for send.
+		cmdFocus("other/rev")
+		if f.focused != "pb" {
+			t.Errorf("focused = %q, want pb", f.focused)
+		}
+	})
+	_ = b
+}
+
 func TestLinkRequiresALivePane(t *testing.T) {
 	a, b, f := twoProjects(t)
 	f.dead = map[string]bool{"pb": true}
@@ -641,7 +882,7 @@ func TestLinkRequiresALivePane(t *testing.T) {
 			t.Errorf("link target = %s, want %s", target, b)
 		}
 		// The stale role is still reported so the user can see why.
-		if len(roles) != 1 || roles[0].Role != "rev" || roles[0].Alive {
+		if len(roles) != 1 || roles[0].Role != "rev" || roles[0].State != paneDead {
 			t.Errorf("roles = %+v, want rev reported as stale", roles)
 		}
 	})
@@ -1107,13 +1348,19 @@ func TestFragmentAtInputEdge(t *testing.T) {
 // fakeMux serves a scripted sequence of screens so the send path can be
 // exercised without a real multiplexer.
 type fakeMux struct {
-	screens  []string
-	idx      int
-	sentText []string
-	enters   int
-	pane     string
-	session  string
-	dead     map[string]bool
+	screens     []string
+	idx         int
+	sentText    []string
+	enters      int
+	pane        string
+	session     string
+	focused     string
+	sessions    []string
+	sessionsErr error
+	dead        map[string]bool
+	// unchecked panes make PaneExists fail, standing in for a multiplexer
+	// that did not answer. Those roles must never be retired.
+	unchecked map[string]bool
 }
 
 func (f *fakeMux) Kind() string { return "fake" }
@@ -1132,7 +1379,19 @@ func (f *fakeMux) CurrentPaneID() (string, error) {
 func (f *fakeMux) ListPanes(string) ([]Pane, error) {
 	return []Pane{{ID: "p1"}}, nil
 }
+func (f *fakeMux) ListSessions() ([]string, error) {
+	if f.sessionsErr != nil {
+		return nil, f.sessionsErr
+	}
+	if f.sessions == nil {
+		return []string{"fake"}, nil
+	}
+	return f.sessions, nil
+}
 func (f *fakeMux) PaneExists(_ string, paneID string) (bool, error) {
+	if f.unchecked[paneID] {
+		return false, fmt.Errorf("list-panes failed")
+	}
 	return !f.dead[paneID], nil
 }
 func (f *fakeMux) NewPane(string, string, string) (string, error) {
@@ -1155,7 +1414,7 @@ func (f *fakeMux) SendKeys(_ string, text string) error {
 }
 func (f *fakeMux) SendEnter(string) error          { f.enters++; return nil }
 func (f *fakeMux) RenamePane(string, string) error { return nil }
-func (f *fakeMux) FocusPane(string) error          { return nil }
+func (f *fakeMux) FocusPane(paneID string) error   { f.focused = paneID; return nil }
 
 func withFakeMux(t *testing.T, f *fakeMux) {
 	t.Helper()

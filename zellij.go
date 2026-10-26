@@ -11,6 +11,7 @@ import (
 
 type ZellijMux struct {
 	runner CommandRunner
+	cache  paneCache
 }
 
 func (z *ZellijMux) Kind() string { return "zellij" }
@@ -46,6 +47,10 @@ type zellijRawPane struct {
 }
 
 func (z *ZellijMux) ListPanes(_ string) ([]Pane, error) {
+	return z.cache.get("", z.listPanes)
+}
+
+func (z *ZellijMux) listPanes() ([]Pane, error) {
 	out, err := z.runner.Output("zellij", "action", "list-panes", "--json", "--all")
 	if err != nil {
 		return nil, err
@@ -71,7 +76,48 @@ func (z *ZellijMux) ListPanes(_ string) ([]Pane, error) {
 			})
 		}
 	}
+	if len(panes) == 0 {
+		// The command we are running occupies a pane of this session, so an
+		// empty list means the response was not understood rather than that
+		// nothing is open. Reporting no panes would mark every registered
+		// role as dead and invite cleanup to delete all of them.
+		return nil, fmt.Errorf("'zellij action list-panes' reported no terminal panes")
+	}
 	return panes, nil
+}
+
+// ListSessions reports the running sessions. Zellij keeps exited sessions
+// listed so they can be resurrected, but a resurrect rebuilds the panes with
+// new IDs, so an exited session is of no use to a stored pane mapping and is
+// reported as not running.
+func (z *ZellijMux) ListSessions() ([]string, error) {
+	out, err := z.runner.Output("zellij", "list-sessions", "--no-formatting")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// The line is "<name> [Created ...] (<status>)". Look for the status
+		// only after the bracket: a session named EXITED-work is running.
+		status := ""
+		if i := strings.LastIndex(line, "]"); i >= 0 {
+			status = line[i+1:]
+		}
+		if strings.Contains(status, "EXITED") {
+			continue
+		}
+		names = append(names, strings.Fields(line)[0])
+	}
+	if len(names) == 0 {
+		// We are running inside a session, so an empty result means the
+		// output was not understood rather than that nothing is running.
+		return nil, fmt.Errorf("could not parse 'zellij list-sessions' output")
+	}
+	return names, nil
 }
 
 func (z *ZellijMux) PaneExists(sessionName string, paneID string) (bool, error) {
@@ -88,6 +134,7 @@ func (z *ZellijMux) PaneExists(sessionName string, paneID string) (bool, error) 
 }
 
 func (z *ZellijMux) NewPane(targetPaneID string, cwd string, direction string) (string, error) {
+	defer z.cache.invalidate()
 	args := []string{"action", "new-pane", "--near-current-pane", "--cwd", cwd}
 	if direction != "" {
 		args = append(args, "--direction", direction)
@@ -104,7 +151,11 @@ func (z *ZellijMux) NewPane(targetPaneID string, cwd string, direction string) (
 }
 
 func (z *ZellijMux) NewTab(name string, cwd string) (string, string, error) {
-	panesBefore, err := z.ListPanes("")
+	// The diff must see the multiplexer, not the memo: the whole point is
+	// that the pane set changes between these two calls.
+	z.cache.invalidate()
+	defer z.cache.invalidate()
+	panesBefore, err := z.listPanes()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to list panes before tab creation: %w", err)
 	}
@@ -124,7 +175,7 @@ func (z *ZellijMux) NewTab(name string, cwd string) (string, string, error) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	panesAfter, err := z.ListPanes("")
+	panesAfter, err := z.listPanes()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to list panes after tab creation: %w", err)
 	}
@@ -137,6 +188,7 @@ func (z *ZellijMux) NewTab(name string, cwd string) (string, string, error) {
 }
 
 func (z *ZellijMux) NewPaneInTab(tabID string, cwd string, direction string) (string, error) {
+	defer z.cache.invalidate()
 	dir := direction
 	if dir == "" {
 		dir = "right"
