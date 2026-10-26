@@ -17,7 +17,7 @@ gofmt -w main.go main_test.go
 - `sessions/` — role ↔ pane のマッピング（**消さない**）
 - `exec/` — exec のランタイムデータ（テスト後に消してよい）
 - `exec.lock/` — exec のロックディレクトリ（テスト後に消してよい）
-- `config.yaml` — プロファイル設定（消さない）
+- プロファイル設定はプロジェクトルートの `.panecom.yaml`（旧 `.panecom/config.yaml` も読み取り可能）
 
 ### テスト時の state クリア
 

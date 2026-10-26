@@ -1309,11 +1309,16 @@ func findConfigFile(dir string) string {
 	return ""
 }
 
-// findProjectConfig searches from the project root rather than the working
-// directory, matching stateRoot so that one project always reads one config
-// even when the working directory has moved into a subdirectory.
+// findProjectConfig prefers the portable config at the project root. The
+// former location inside the state directory remains a fallback so existing
+// projects continue to work until their config is moved.
 func findProjectConfig() string {
-	for dir := namespaceAnchor(); ; {
+	anchor := namespaceAnchor()
+	rootConfig := filepath.Join(anchor, ".panecom.yaml")
+	if info, err := os.Stat(rootConfig); err == nil && !info.IsDir() {
+		return rootConfig
+	}
+	for dir := anchor; ; {
 		panecomDir := filepath.Join(dir, ".panecom")
 		if path := findConfigFile(panecomDir); path != "" {
 			return path
@@ -1378,7 +1383,8 @@ func loadConfig() (*config, error) {
 	if len(merged.Profiles) == 0 {
 		locations := []string{
 			filepath.Join(globalConfigDir(), "config.yaml"),
-			".panecom/config.yaml",
+			filepath.Join(namespaceAnchor(), ".panecom.yaml"),
+			".panecom/config.yaml (legacy)",
 		}
 		return nil, fmt.Errorf("no config found (searched: %s)", strings.Join(locations, ", "))
 	}
@@ -1571,7 +1577,10 @@ Commands:
                                  exit 4: not submitted (text left in input line)
   share [--full] [-l N] <role>    Share this pane's screen with <role>
   exec [--timeout N] <role> <cmd> Run command on <role>, return output
-  profile [-f] <name>            Launch profile from .panecom/config.yaml
+  profile [-f] <name>            Launch profile from .panecom.yaml
+  skill install                  Choose agent and user/project scope
+  skill list                     Show tracked skill installations
+  skill uninstall                Remove a tracked skill installation
   update                         Update panecom to the latest version
   --version                      Show version
 
@@ -1602,6 +1611,25 @@ func main() {
 		return
 	case "update":
 		if err := update.Run(Version); err != nil {
+			die(err.Error())
+		}
+		return
+	case "skill":
+		if len(args) != 2 {
+			usage()
+		}
+		var err error
+		switch args[1] {
+		case "install":
+			err = cmdSkillInstall()
+		case "list":
+			err = cmdSkillList()
+		case "uninstall":
+			err = cmdSkillUninstall()
+		default:
+			usage()
+		}
+		if err != nil {
 			die(err.Error())
 		}
 		return
