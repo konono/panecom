@@ -589,10 +589,10 @@ func printRoles(w io.Writer, entries []roleEntry, showStale bool) {
 		case paneUnknown:
 			state = " (unknown)"
 		}
-		fmt.Fprintf(w, "  %-12s %s%s\n", e.Role, e.PaneID, state)
+		_, _ = fmt.Fprintf(w, "  %-12s %s%s\n", e.Role, e.PaneID, state)
 	}
 	if hidden > 0 {
-		fmt.Fprintf(w, "  (%s hidden: panecom list --stale, panecom cleanup)\n", plural(hidden, "stale entry", "stale entries"))
+		_, _ = fmt.Fprintf(w, "  (%s hidden: panecom list --stale, panecom cleanup)\n", plural(hidden, "stale entry", "stale entries"))
 	}
 }
 

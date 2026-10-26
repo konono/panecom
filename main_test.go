@@ -682,7 +682,7 @@ func TestCleanupRemovesOnlyDeadRoles(t *testing.T) {
 		_, sRoot := requireSession()
 		nsDir := namespaceDir(sRoot, anchorFrom(t, a))
 
-		removed, unknown := cleanupNamespace("fake", nsDir, true)
+		removed, _ := cleanupNamespace("fake", nsDir, true)
 		if len(removed) != 1 || removed[0].Role != "rev" {
 			t.Fatalf("dry run should report only the dead role, got %+v", removed)
 		}
@@ -690,7 +690,7 @@ func TestCleanupRemovesOnlyDeadRoles(t *testing.T) {
 			t.Error("dry run must not delete anything")
 		}
 
-		removed, unknown = cleanupNamespace("fake", nsDir, false)
+		removed, unknown := cleanupNamespace("fake", nsDir, false)
 		if len(removed) != 1 || removed[0].Role != "rev" {
 			t.Fatalf("cleanup removed %+v, want only rev", removed)
 		}
