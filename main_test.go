@@ -450,11 +450,16 @@ func TestExpandPathFrom(t *testing.T) {
 // leaves the process in the first one.
 func twoProjects(t *testing.T) (a, b string, f *fakeMux) {
 	t.Helper()
+	return twoProjectsNamed(t, "a", "b")
+}
+
+func twoProjectsNamed(t *testing.T, aName, bName string) (a, b string, f *fakeMux) {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PANECOM_STATE_DIR", "")
-	a = filepath.Join(home, "a")
-	b = filepath.Join(home, "b")
+	a = filepath.Join(home, aName)
+	b = filepath.Join(home, bName)
 	for _, d := range []string{a, b} {
 		if err := os.MkdirAll(filepath.Join(d, ".git"), 0755); err != nil {
 			t.Fatal(err)
@@ -837,6 +842,280 @@ func TestCleanupRemovesDeadSessionDirectories(t *testing.T) {
 		// The session we are in keeps its state.
 		if _, err := resolveRole(namespaceDir(sessionRootIn(store, "fake", "fake"), anchorFrom(t, a)), "d"); err != nil {
 			t.Errorf("the current session's roles must survive: %v", err)
+		}
+	})
+}
+
+func TestTellNamesTheSender(t *testing.T) {
+	a, _, f := twoProjects(t)
+	f.screens = []string{"> ", "done\n"}
+
+	inDir(t, a, func() {
+		f.pane = "pa_qa"
+		cmdRegister("qa")
+		f.pane = "pa"
+		f.sentText, f.sentTo = nil, nil
+
+		// Within one namespace the role name is enough to reply by, so the
+		// header stays short.
+		cmdTell("qa", "please review", false, 0)
+
+		if len(f.sentText) != 1 {
+			t.Fatalf("sent %d messages, want 1", len(f.sentText))
+		}
+		got := f.sentText[0]
+		// The header is its own line: verifyFragment samples the last
+		// non-empty line, which must stay the message.
+		want := "[panecom:from=d]\nplease review"
+		if got != want {
+			t.Errorf("sent %q, want %q", got, want)
+		}
+		if verifyFragment(got) == "[panecom:from=d]" {
+			t.Error("delivery verification must sample the message, not the header")
+		}
+		if f.sentTo[0] != "pa_qa" {
+			t.Errorf("sent to pane %q, want pa_qa", f.sentTo[0])
+		}
+	})
+}
+
+// A role name only means something inside one namespace, so "from=d" alone
+// leaves a recipient in another project with no way back: their own namespace
+// either has no d, or has a different agent under that name. The header has to
+// carry the project for the reply to be possible at all.
+func TestTellAcrossProjectsCarriesTheSenderProject(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		cmdTell("other/rev", "please review", false, 0)
+
+		got := f.sentText[0]
+		want := "[panecom:from=d]\n[panecom:project=" + a + "]\nplease review"
+		if got != want {
+			t.Errorf("sent %q, want %q", got, want)
+		}
+	})
+}
+
+// The round trip the header exists for: A tells B, then B answers using only
+// what the header told it, and the answer reaches A's pane rather than a role
+// of the same name on B's side.
+func TestTellAcrossProjectsCanBeAnswered(t *testing.T) {
+	a, b, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		cmdTell("other/rev", "please review", false, 0)
+	})
+
+	fromRole, project := parseTellHeader(t, f.sentText[0])
+
+	// A same-named role on the recipient's side is what makes a bare reply
+	// dangerous: without the project it would land here instead of in A.
+	inDir(t, b, func() { f.pane = "pb_decoy"; cmdRegister(fromRole) })
+
+	f.pane = "pb"
+	f.sentText, f.sentTo = nil, nil
+	inDir(t, b, func() {
+		// Exactly what the skill tells the recipient to do with "project=".
+		if _, _, err := linkProject("back", project, false); err != nil {
+			t.Fatalf("linking back to the sender's project failed: %v", err)
+		}
+		cmdTell("back/"+fromRole, "looks good", false, 0)
+	})
+
+	if len(f.sentTo) != 1 {
+		t.Fatalf("sent %d replies, want 1", len(f.sentTo))
+	}
+	if f.sentTo[0] != "pa" {
+		t.Errorf("reply went to pane %q, want pa (the original sender)", f.sentTo[0])
+	}
+	if !strings.HasSuffix(f.sentText[0], "\nlooks good") {
+		t.Errorf("reply body = %q", f.sentText[0])
+	}
+}
+
+// parseTellHeader reads the header the way the skill tells a recipient to:
+// one value per line, the whole line between the prefix and the final "]".
+// Nothing is split on whitespace, so a project path may contain spaces.
+func parseTellHeader(t *testing.T, message string) (role, project string) {
+	t.Helper()
+	for _, line := range strings.Split(message, "\n") {
+		switch {
+		case strings.HasPrefix(line, "[panecom:from="):
+			role = strings.TrimSuffix(strings.TrimPrefix(line, "[panecom:from="), "]")
+		case strings.HasPrefix(line, "[panecom:project="):
+			project = strings.TrimSuffix(strings.TrimPrefix(line, "[panecom:project="), "]")
+		}
+	}
+	if role == "" || project == "" {
+		t.Fatalf("message %q lacks a usable reply address", message)
+	}
+	return role, project
+}
+
+// A project path with a space is ordinary on macOS, and the reply address is
+// worthless if reading it requires guessing where the path ends.
+func TestTellAcrossProjectsCanBeAnsweredWhenThePathHasSpaces(t *testing.T) {
+	a, b, f := twoProjectsNamed(t, "My Project", "Their Project")
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", b, false); err != nil {
+			t.Fatal(err)
+		}
+		cmdTell("other/rev", "please review", false, 0)
+	})
+
+	fromRole, project := parseTellHeader(t, f.sentText[0])
+	if project != a {
+		t.Fatalf("project = %q, want %q (the path must survive reading)", project, a)
+	}
+
+	inDir(t, b, func() { f.pane = "pb_decoy"; cmdRegister(fromRole) })
+	f.pane = "pb"
+	f.sentText, f.sentTo = nil, nil
+	inDir(t, b, func() {
+		if _, _, err := linkProject("back", project, false); err != nil {
+			t.Fatalf("linking back to a path with a space failed: %v", err)
+		}
+		cmdTell("back/"+fromRole, "looks good", false, 0)
+	})
+
+	if len(f.sentTo) != 1 || f.sentTo[0] != "pa" {
+		t.Errorf("reply went to %v, want [pa] (the original sender)", f.sentTo)
+	}
+}
+
+// captureDie runs fn and reports the message it refused with, or "" when it
+// did not refuse. die exits the process in normal use, which a test cannot
+// survive, so it is swapped for a panic that unwinds back to here.
+func captureDie(t *testing.T, fn func()) (msg string) {
+	t.Helper()
+	type dieSignal struct{}
+	prev := die
+	die = func(m string) {
+		msg = m
+		panic(dieSignal{})
+	}
+	defer func() {
+		die = prev
+		if r := recover(); r != nil {
+			if _, ok := r.(dieSignal); !ok {
+				panic(r)
+			}
+		}
+	}()
+	fn()
+	return msg
+}
+
+func TestTellRejectsAnEmptyMessage(t *testing.T) {
+	a, _, f := twoProjects(t)
+	// An empty body leaves the header as the last non-empty line, so
+	// delivery verification would sample a string every message shares.
+	if frag := verifyFragment("[panecom:from=d]\n   "); frag != "[panecom:from=d]" {
+		t.Fatalf("precondition changed: fragment = %q", frag)
+	}
+
+	inDir(t, a, func() {
+		f.pane = "pa_qa"
+		cmdRegister("qa")
+		f.pane = "pa"
+		f.sentText, f.sentTo = nil, nil
+
+		for _, message := range []string{"", "   \n  "} {
+			msg := captureDie(t, func() { cmdTell("qa", message, false, 0) })
+			if msg == "" {
+				t.Errorf("cmdTell(%q) was accepted, want a refusal", message)
+			}
+			if len(f.sentText) != 0 {
+				t.Errorf("cmdTell(%q) sent %q", message, f.sentText)
+			}
+		}
+	})
+}
+
+// Falling back to the short header here would hand the recipient a role name
+// that means something else in their project.
+func TestTellRefusesCrossProjectWithoutAProject(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		_, sRoot := requireSession()
+		if err := os.Remove(filepath.Join(namespaceDir(sRoot, anchorFrom(t, a)), ".cwd")); err != nil {
+			t.Fatal(err)
+		}
+		f.sentText, f.sentTo = nil, nil
+
+		msg := captureDie(t, func() { cmdTell("other/rev", "please review", false, 0) })
+		if msg == "" {
+			t.Fatal("tell was accepted without a project to reply to")
+		}
+		if len(f.sentText) != 0 {
+			t.Errorf("a message was sent anyway: %q", f.sentText)
+		}
+	})
+}
+
+// The same gap within one namespace is fine: the role name is enough there.
+func TestTellWithinOneProjectDoesNotNeedTheProject(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		f.pane = "pa_qa"
+		cmdRegister("qa")
+		f.pane = "pa"
+		_, sRoot := requireSession()
+		if err := os.Remove(filepath.Join(namespaceDir(sRoot, anchorFrom(t, a)), ".cwd")); err != nil {
+			t.Fatal(err)
+		}
+		f.sentText, f.sentTo = nil, nil
+
+		if msg := captureDie(t, func() { cmdTell("qa", "ping", false, 0) }); msg != "" {
+			t.Fatalf("refused a same-project tell: %s", msg)
+		}
+		if len(f.sentText) != 1 || f.sentText[0] != "[panecom:from=d]\nping" {
+			t.Errorf("sent %q", f.sentText)
+		}
+	})
+}
+
+func TestTellRefusesWhenTheSenderHasNoRole(t *testing.T) {
+	a, _, f := twoProjects(t)
+	// A pane that never registered has no name to put in the header, and an
+	// anonymous message defeats the point of the command.
+	f.pane = "p_unregistered"
+
+	inDir(t, a, func() {
+		if got, _ := ownRoleAndAnchor(); got != "" {
+			t.Fatalf("ownRoleAndAnchor = %q, want empty for an unregistered pane", got)
+		}
+		if len(f.sentText) != 0 {
+			t.Error("nothing should have been sent")
+		}
+	})
+}
+
+func TestSendStaysVerbatim(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		// send also drives panes running a shell, so it must type exactly
+		// what it was given.
+		cmdSend("other/rev", "echo hello", false, 0)
+		if len(f.sentText) != 1 || f.sentText[0] != "echo hello" {
+			t.Errorf("send altered the message: %q", f.sentText)
 		}
 	})
 }
@@ -1351,6 +1630,7 @@ type fakeMux struct {
 	screens     []string
 	idx         int
 	sentText    []string
+	sentTo      []string
 	enters      int
 	pane        string
 	session     string
@@ -1408,8 +1688,9 @@ func (f *fakeMux) DumpPane(string, bool) (string, error) {
 	}
 	return s, nil
 }
-func (f *fakeMux) SendKeys(_ string, text string) error {
+func (f *fakeMux) SendKeys(paneID string, text string) error {
 	f.sentText = append(f.sentText, text)
+	f.sentTo = append(f.sentTo, paneID)
 	return nil
 }
 func (f *fakeMux) SendEnter(string) error          { f.enters++; return nil }

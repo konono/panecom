@@ -22,7 +22,9 @@ var rolePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 var mux Multiplexer
 
-func die(msg string) {
+// die is a variable so that tests can observe a refusal instead of taking
+// the process down with it.
+var die = func(msg string) {
 	fmt.Fprintf(os.Stderr, "panecom: %s\n", msg)
 	os.Exit(1)
 }
@@ -1074,6 +1076,71 @@ func cmdSend(role, message string, verify bool, verifyTimeout float64) {
 	}
 }
 
+// cmdTell carries a message between registered roles. It is send with the
+// sender named: the recipient of a bare send has no way to tell who wrote it,
+// so a reply goes to whoever the reader guesses. send stays a raw way to type
+// into a pane, which is also how panes running a shell are driven, and must
+// not grow a header for their sake.
+func cmdTell(role, message string, verify bool, verifyTimeout float64) {
+	if strings.TrimSpace(message) == "" {
+		die("tell needs a message")
+	}
+	fromRole, fromAnchor := ownRoleAndAnchor()
+	if fromRole == "" {
+		die("tell needs your own role: run 'panecom register <role>' first, or use 'panecom send' to type into a pane without naming a sender")
+	}
+	paneID := resolveRoleForCommand(role)
+	// The header is its own line so that verifyFragment, which takes the last
+	// non-empty line, still samples the message rather than the header.
+	// A role name only resolves inside one namespace. Reaching another
+	// project means the recipient cannot answer "from=X" by name: their own
+	// namespace either has no X, or has a different agent under that name.
+	// Carry the project so they can link back to it and reply.
+	header := fmt.Sprintf("[panecom:from=%s]", fromRole)
+	if alias, _ := splitQualifiedRole(role); alias != "" {
+		if fromAnchor == "" {
+			// Without it the recipient would answer a role name that means
+			// something else in their project, so refuse rather than send
+			// something that invites a misdelivery.
+			die("cannot tell '" + role + "': this pane's project is unknown, so the recipient would have no way to reply (re-register with 'panecom register " + fromRole + "')")
+			return
+		}
+		// The project goes on its own line: a path may contain spaces, and a
+		// line boundary delimits it without the reader having to split fields.
+		header += fmt.Sprintf("\n[panecom:project=%s]", fromAnchor)
+	}
+	body := fmt.Sprintf("%s\n%s", header, message)
+	code, screen, reason, err := sendAndVerify(role, paneID, body, verify, verifyTimeout)
+	if err != nil {
+		die(fmt.Sprintf("failed to tell '%s': %s", role, err.Error()))
+	}
+	if code != 0 {
+		sendFailure(role, screen, code, reason)
+	}
+}
+
+// ownRoleAndAnchor names the role this pane is registered as and the project
+// it registered into. Both are empty when the pane has no role.
+func ownRoleAndAnchor() (string, string) {
+	paneID, err := mux.CurrentPaneID()
+	if err != nil || paneID == "" {
+		return "", ""
+	}
+	_, sRoot := requireSession()
+	nsDir, err := namespaceForCurrentPane(sRoot, paneID)
+	if err != nil {
+		return "", ""
+	}
+	entries, _ := os.ReadDir(filepath.Join(nsDir, "roles"))
+	for _, e := range entries {
+		if content, _ := readFile(filepath.Join(nsDir, "roles", e.Name())); content == paneID {
+			anchor, _ := readFile(filepath.Join(nsDir, ".cwd"))
+			return e.Name(), anchor
+		}
+	}
+	return "", ""
+}
+
 // sendAndVerify sends the message and, when verify is set, watches the
 // recipient's screen to decide whether it was accepted. It returns the exit
 // code to use (0 when delivery looks confirmed or could not be checked), the
@@ -1147,17 +1214,11 @@ func cmdShare(toRole string, full bool, lines int) {
 	fromPaneID := requirePaneID()
 	toPaneID := resolveRoleForCommand(toRole)
 
-	_, sRoot := requireSession()
-	fromRole := "unknown"
-	if nsDir, err := namespaceForCurrentPane(sRoot, fromPaneID); err == nil {
-		entries, _ := os.ReadDir(filepath.Join(nsDir, "roles"))
-		for _, e := range entries {
-			content, _ := readFile(filepath.Join(nsDir, "roles", e.Name()))
-			if content == fromPaneID {
-				fromRole = e.Name()
-				break
-			}
-		}
+	// share names the sender too, but a screen is worth passing on even from
+	// a pane that never registered, so this one falls back instead of failing.
+	fromRole, _ := ownRoleAndAnchor()
+	if fromRole == "" {
+		fromRole = "unknown"
 	}
 
 	screen, err := mux.DumpPane(fromPaneID, full)
@@ -1792,8 +1853,11 @@ Commands:
   focus <role>                   Move multiplexer focus to <role>'s pane
   open [-d right|down] <role>    Open new pane and register as <role>
   dump [--full] [-l N] <role>    Dump screen of <role>'s pane
+  tell [--no-verify] [--verify-timeout N] <role> <msg>
+                                 Message <role> as yourself; prefixes
+                                 [panecom:from=<your role>] so they can reply
   send [--no-verify] [--verify-timeout N] <role> <msg>
-                                 Send message to <role>'s pane
+                                 Type a message into <role>'s pane, verbatim
                                  exit 3: unconfirmed (screen unchanged)
                                  exit 4: not submitted (text left in input line)
   share [--full] [-l N] <role>    Share this pane's screen with <role>
@@ -2016,6 +2080,30 @@ func main() {
 			usage()
 		}
 		cmdSend(positional[0], strings.Join(positional[1:], " "), verify, verifyTimeout)
+	case "tell":
+		verify := true
+		verifyTimeout := 3.0
+		positional := []string{}
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == "--no-verify" {
+				verify = false
+			} else if rest[i] == "--verify-timeout" && i+1 < len(rest) {
+				t, err := strconv.ParseFloat(rest[i+1], 64)
+				if err != nil || t <= 0 {
+					die("--verify-timeout requires a positive number")
+				}
+				verifyTimeout = t
+				i++
+			} else {
+				positional = append(positional, rest[i:]...)
+				break
+			}
+		}
+		if len(positional) < 2 {
+			usage()
+		}
+		cmdTell(positional[0], strings.Join(positional[1:], " "), verify, verifyTimeout)
 	case "share":
 		full := false
 		lines := 0
