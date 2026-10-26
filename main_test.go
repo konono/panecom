@@ -846,10 +846,14 @@ func TestTellNamesTheSender(t *testing.T) {
 	f.screens = []string{"> ", "done\n"}
 
 	inDir(t, a, func() {
-		if _, _, err := linkProject("other", "../b", false); err != nil {
-			t.Fatal(err)
-		}
-		cmdTell("other/rev", "please review", false, 0)
+		f.pane = "pa_qa"
+		cmdRegister("qa")
+		f.pane = "pa"
+		f.sentText, f.sentTo = nil, nil
+
+		// Within one namespace the role name is enough to reply by, so the
+		// header stays short.
+		cmdTell("qa", "please review", false, 0)
 
 		if len(f.sentText) != 1 {
 			t.Fatalf("sent %d messages, want 1", len(f.sentText))
@@ -864,6 +868,106 @@ func TestTellNamesTheSender(t *testing.T) {
 		if verifyFragment(got) == "[panecom:from=d]" {
 			t.Error("delivery verification must sample the message, not the header")
 		}
+		if f.sentTo[0] != "pa_qa" {
+			t.Errorf("sent to pane %q, want pa_qa", f.sentTo[0])
+		}
+	})
+}
+
+// A role name only means something inside one namespace, so "from=d" alone
+// leaves a recipient in another project with no way back: their own namespace
+// either has no d, or has a different agent under that name. The header has to
+// carry the project for the reply to be possible at all.
+func TestTellAcrossProjectsCarriesTheSenderProject(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		cmdTell("other/rev", "please review", false, 0)
+
+		got := f.sentText[0]
+		want := "[panecom:from=d project=" + a + "]\nplease review"
+		if got != want {
+			t.Errorf("sent %q, want %q", got, want)
+		}
+	})
+}
+
+// The round trip the header exists for: A tells B, then B answers using only
+// what the header told it, and the answer reaches A's pane rather than a role
+// of the same name on B's side.
+func TestTellAcrossProjectsCanBeAnswered(t *testing.T) {
+	a, b, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		cmdTell("other/rev", "please review", false, 0)
+	})
+
+	header := strings.SplitN(f.sentText[0], "\n", 2)[0]
+	fromRole, project := parseTellHeader(t, header)
+
+	// A same-named role on the recipient's side is what makes a bare reply
+	// dangerous: without the project it would land here instead of in A.
+	inDir(t, b, func() { f.pane = "pb_decoy"; cmdRegister(fromRole) })
+
+	f.pane = "pb"
+	f.sentText, f.sentTo = nil, nil
+	inDir(t, b, func() {
+		// Exactly what the skill tells the recipient to do with "project=".
+		if _, _, err := linkProject("back", project, false); err != nil {
+			t.Fatalf("linking back to the sender's project failed: %v", err)
+		}
+		cmdTell("back/"+fromRole, "looks good", false, 0)
+	})
+
+	if len(f.sentTo) != 1 {
+		t.Fatalf("sent %d replies, want 1", len(f.sentTo))
+	}
+	if f.sentTo[0] != "pa" {
+		t.Errorf("reply went to pane %q, want pa (the original sender)", f.sentTo[0])
+	}
+	if !strings.HasSuffix(f.sentText[0], "\nlooks good") {
+		t.Errorf("reply body = %q", f.sentText[0])
+	}
+}
+
+func parseTellHeader(t *testing.T, header string) (role, project string) {
+	t.Helper()
+	inner := strings.TrimSuffix(strings.TrimPrefix(header, "[panecom:"), "]")
+	for _, field := range strings.Fields(inner) {
+		k, v, ok := strings.Cut(field, "=")
+		if !ok {
+			t.Fatalf("header field %q is not key=value", field)
+		}
+		switch k {
+		case "from":
+			role = v
+		case "project":
+			project = v
+		}
+	}
+	if role == "" || project == "" {
+		t.Fatalf("header %q lacks a usable reply address", header)
+	}
+	return role, project
+}
+
+func TestTellRejectsAnEmptyMessage(t *testing.T) {
+	a, _, f := twoProjects(t)
+	inDir(t, a, func() {
+		// An empty body leaves the header as the last non-empty line, so
+		// delivery verification would sample a string every message shares.
+		if frag := verifyFragment("[panecom:from=d]\n   "); frag != "[panecom:from=d]" {
+			t.Fatalf("precondition changed: fragment = %q", frag)
+		}
+		if len(f.sentText) != 0 {
+			t.Error("nothing should have been sent")
+		}
 	})
 }
 
@@ -874,8 +978,8 @@ func TestTellRefusesWhenTheSenderHasNoRole(t *testing.T) {
 	f.pane = "p_unregistered"
 
 	inDir(t, a, func() {
-		if got := ownRole(); got != "" {
-			t.Fatalf("ownRole = %q, want empty for an unregistered pane", got)
+		if got, _ := ownRoleAndAnchor(); got != "" {
+			t.Fatalf("ownRoleAndAnchor = %q, want empty for an unregistered pane", got)
 		}
 		if len(f.sentText) != 0 {
 			t.Error("nothing should have been sent")
@@ -1409,6 +1513,7 @@ type fakeMux struct {
 	screens     []string
 	idx         int
 	sentText    []string
+	sentTo      []string
 	enters      int
 	pane        string
 	session     string
@@ -1466,8 +1571,9 @@ func (f *fakeMux) DumpPane(string, bool) (string, error) {
 	}
 	return s, nil
 }
-func (f *fakeMux) SendKeys(_ string, text string) error {
+func (f *fakeMux) SendKeys(paneID string, text string) error {
 	f.sentText = append(f.sentText, text)
+	f.sentTo = append(f.sentTo, paneID)
 	return nil
 }
 func (f *fakeMux) SendEnter(string) error          { f.enters++; return nil }

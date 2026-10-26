@@ -39,7 +39,14 @@ description: ユーザーから developer / reviewer 等の役割を割り当て
 **panecom 経由で受けた依頼は、panecom 経由で返す。** 相手は別の pane にいて、こちらの画面を見ていない。自分の pane に結果を書いただけでは、相手は待ち続ける。
 
 - **受けた側**: 作業が終わったら、または結論・判断が出たら `panecom tell <依頼元 role> "<結果>"` を送る。**送信するまでそのタスクは完了していない**
-- **返信先の調べ方**: `tell` で届いたメッセージは 1 行目が `[panecom:from=<role>]` になっている。そこに書かれた role に返す
+- **返信先の調べ方**: `tell` で届いたメッセージは 1 行目がヘッダになっている。形は 2 種類あり、**`project=` の有無で返し方が変わる**
+
+  | 届いたヘッダ | 送信元 | 返し方 |
+  |---|---|---|
+  | `[panecom:from=reviewer]` | 同じプロジェクト | `panecom tell reviewer "<返信>"` |
+  | `[panecom:from=d project=/path/to/other]` | **別プロジェクト** | `panecom link <alias> /path/to/other` してから `panecom tell <alias>/d "<返信>"` |
+
+  **role 名だけで返さない**。role は namespace の中でしか意味を持たないため、別プロジェクトから来た `from=d` にそのまま `panecom tell d` と返すと、自分のプロジェクトの `d` を探してしまう。未登録なら失敗し、**同名の別エージェントが居れば誤送信になる**。`project=` が付いていたら必ず link を経由する（alias は自分で決めてよい。既存の link があるならそれを使う）
 - **返す内容**: 結論（approve / changes requested など）、その理由、相手が次に取るべき行動。長くなる場合は要点だけを送り、詳細は PR コメントやファイルに置いてその場所を伝える
 - **送る側**: `tell` が自分の role を自動で付けるので、本文で名乗る必要はない。`send` で送ると送信者が付かず、相手は返信先を判断できない
 
@@ -51,6 +58,13 @@ description: ユーザーから developer / reviewer 等の役割を割り当て
 
   ```
   [panecom:from=developer]
+  PR #20 のレビューをお願いします: <URL>
+  ```
+
+  別プロジェクトの相手に送ると、相手が返信できるよう自分のプロジェクトのパスも付く:
+
+  ```
+  [panecom:from=developer project=/path/to/myproject]
   PR #20 のレビューをお願いします: <URL>
   ```
 
@@ -96,7 +110,7 @@ PANECOM_MUX=tmux panecom <command> # 環境変数
 | | `tell` | `send` |
 |---|---|---|
 | 相手 | role を持つ AI エージェント（人を含む） | 任意の pane（シェル、TUI、エディタ等） |
-| 送る内容 | 1 行目に `[panecom:from=<自分の role>]` が付く | **与えた文字列をそのまま**打ち込む |
+| 送る内容 | 1 行目に `[panecom:from=<自分の role>]` が付く（別プロジェクト宛なら `project=<自分のパス>` も） | **与えた文字列をそのまま**打ち込む |
 | 自分の登録 | **必須**（未登録ならエラー） | 不要 |
 | 用途 | 依頼・相談・報告・レビュー結果 | コマンド入力、キー送信、プロンプトへの応答 |
 
@@ -106,6 +120,8 @@ panecom send terminal "git status"                        # pane にそのまま
 ```
 
 `send` は汎用のプリミティブで、ヘッダを付けない。シェルや TUI を相手にしたときに `[panecom:from=...]` が混ざると壊れるため。エージェント宛に `send` を使うと送信者が付かず、相手は返信先を判断できない（それが `tell` を分けた理由）。
+
+別プロジェクトの相手（`<alias>/<role>` 形式）に送る場合、ヘッダに自分のプロジェクトのパスが `project=` として入る。role 名は namespace の中でしか通用せず、相手は role 名だけでは返信できないため。返信を受ける側の手順は「依頼と応答」の表を参照。
 
 `tell` は未登録の pane から実行するとエラーになる。名乗るのが目的のコマンドなので、先に `panecom register <role>` する。名乗らずに文字列を送りたいだけなら `send` を使う。
 

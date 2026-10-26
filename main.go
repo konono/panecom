@@ -1080,7 +1080,10 @@ func cmdSend(role, message string, verify bool, verifyTimeout float64) {
 // into a pane, which is also how panes running a shell are driven, and must
 // not grow a header for their sake.
 func cmdTell(role, message string, verify bool, verifyTimeout float64) {
-	fromRole := ownRole()
+	if strings.TrimSpace(message) == "" {
+		die("tell needs a message")
+	}
+	fromRole, fromAnchor := ownRoleAndAnchor()
 	if fromRole == "" {
 		die("tell needs your own role: run 'panecom register <role>' first, or use 'panecom send' to type into a pane without naming a sender")
 	}
@@ -1088,6 +1091,13 @@ func cmdTell(role, message string, verify bool, verifyTimeout float64) {
 	// The header is its own line so that verifyFragment, which takes the last
 	// non-empty line, still samples the message rather than the header.
 	body := fmt.Sprintf("[panecom:from=%s]\n%s", fromRole, message)
+	// A role name only resolves inside one namespace. Reaching another
+	// project means the recipient cannot answer "from=X" by name: their own
+	// namespace either has no X, or has a different agent under that name.
+	// Carry the project so they can link back to it and reply.
+	if alias, _ := splitQualifiedRole(role); alias != "" && fromAnchor != "" {
+		body = fmt.Sprintf("[panecom:from=%s project=%s]\n%s", fromRole, fromAnchor, message)
+	}
 	code, screen, reason, err := sendAndVerify(role, paneID, body, verify, verifyTimeout)
 	if err != nil {
 		die(fmt.Sprintf("failed to tell '%s': %s", role, err.Error()))
@@ -1097,24 +1107,26 @@ func cmdTell(role, message string, verify bool, verifyTimeout float64) {
 	}
 }
 
-// ownRole names the role this pane is registered as, or "" when it has none.
-func ownRole() string {
+// ownRoleAndAnchor names the role this pane is registered as and the project
+// it registered into. Both are empty when the pane has no role.
+func ownRoleAndAnchor() (string, string) {
 	paneID, err := mux.CurrentPaneID()
 	if err != nil || paneID == "" {
-		return ""
+		return "", ""
 	}
 	_, sRoot := requireSession()
 	nsDir, err := namespaceForCurrentPane(sRoot, paneID)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	entries, _ := os.ReadDir(filepath.Join(nsDir, "roles"))
 	for _, e := range entries {
 		if content, _ := readFile(filepath.Join(nsDir, "roles", e.Name())); content == paneID {
-			return e.Name()
+			anchor, _ := readFile(filepath.Join(nsDir, ".cwd"))
+			return e.Name(), anchor
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // sendAndVerify sends the message and, when verify is set, watches the
@@ -1192,7 +1204,7 @@ func cmdShare(toRole string, full bool, lines int) {
 
 	// share names the sender too, but a screen is worth passing on even from
 	// a pane that never registered, so this one falls back instead of failing.
-	fromRole := ownRole()
+	fromRole, _ := ownRoleAndAnchor()
 	if fromRole == "" {
 		fromRole = "unknown"
 	}
