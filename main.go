@@ -289,6 +289,15 @@ func describeNamespace(nsDir string) string {
 	return nsDir
 }
 
+// namespaceLabel is for human-facing output. Keep describeNamespace's path
+// fallback for errors, where the path helps diagnose a damaged state store.
+func namespaceLabel(nsDir string) string {
+	if anchor, err := readFile(filepath.Join(nsDir, ".cwd")); err == nil && anchor != "" {
+		return anchor
+	}
+	return "(unknown)"
+}
+
 func resolveRole(nsDir, role string) (string, error) {
 	path := filepath.Join(nsDir, "roles", role)
 	paneID, err := readFile(path)
@@ -430,11 +439,7 @@ func cmdWhoami(roleOnly bool) {
 				fmt.Println(e.Name())
 				return
 			}
-			anchor, err := readFile(filepath.Join(nsDir, ".cwd"))
-			if err != nil || anchor == "" {
-				anchor = "(unknown)"
-			}
-			fmt.Printf("role: %s\npane: %s\nnamespace: %s\n", e.Name(), paneID, anchor)
+			fmt.Printf("role: %s\npane: %s\nnamespace: %s\n", e.Name(), paneID, namespaceLabel(nsDir))
 			return
 		}
 	}
@@ -654,7 +659,7 @@ func cmdList(alias string, all bool) {
 	}
 
 	own := filepath.Join(sRoot, "namespaces", nsHash)
-	fmt.Println(describeNamespace(own))
+	fmt.Println(namespaceLabel(own))
 	printRoles(listRoles(session, own))
 	warnLegacyRegistrations(os.Stderr, sRoot, session, namespaceAnchor())
 

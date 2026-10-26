@@ -338,10 +338,16 @@ func TestDescribeNamespaceReportsRegisteredAnchor(t *testing.T) {
 	if got := describeNamespace(nsDir); got != "/work/project" {
 		t.Errorf("describeNamespace = %s, want /work/project", got)
 	}
+	if got := namespaceLabel(nsDir); got != "/work/project" {
+		t.Errorf("namespaceLabel = %s, want /work/project", got)
+	}
 
 	empty := t.TempDir()
 	if got := describeNamespace(empty); got != empty {
 		t.Errorf("describeNamespace = %s, want the namespace path %s", got, empty)
+	}
+	if got := namespaceLabel(empty); got != "(unknown)" {
+		t.Errorf("namespaceLabel = %s, want (unknown)", got)
 	}
 }
 
