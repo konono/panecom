@@ -460,6 +460,9 @@ func resolveRoleForCommand(qualified string) string {
 
 	targetPaneID, err := resolveRole(nsDir, role)
 	if err != nil {
+		if alias == "" {
+			warnLegacyRegistrations(os.Stderr, sRoot, session, namespaceAnchor())
+		}
 		die(fmt.Sprintf("role '%s' is not registered in namespace %s", role, where))
 	}
 
@@ -645,6 +648,7 @@ func cmdList(alias string, all bool) {
 	own := filepath.Join(sRoot, "namespaces", nsHash)
 	fmt.Println(describeNamespace(own))
 	printRoles(listRoles(session, own))
+	warnLegacyRegistrations(os.Stderr, sRoot, session, namespaceAnchor())
 
 	if !all {
 		return
