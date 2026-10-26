@@ -14,8 +14,12 @@ func TestPickPaneSelectsNextAndCanCancel(t *testing.T) {
 		{ID: "p2", TabName: "mcp", Title: "codex", Cwd: "/mcp"},
 	}
 	var out bytes.Buffer
+	var highlighted []string
 	selected, ok, err := pickPane(panes, "p1", strings.NewReader("\x1b[B\r"), &out, 80, 24, func(p Pane) (string, error) {
 		return "screen of " + p.ID, nil
+	}, func(p Pane) error {
+		highlighted = append(highlighted, p.ID)
+		return nil
 	})
 	if err != nil || !ok || selected.ID != "p2" {
 		t.Fatalf("selected=%+v ok=%v err=%v", selected, ok, err)
@@ -23,9 +27,16 @@ func TestPickPaneSelectsNextAndCanCancel(t *testing.T) {
 	if !strings.Contains(out.String(), "screen of p2") || !strings.Contains(out.String(), "mcp") {
 		t.Fatalf("selected pane details missing from picker: %q", out.String())
 	}
-	_, ok, err = pickPane(panes, "p1", strings.NewReader("q"), &out, 80, 24, nil)
+	if strings.Join(highlighted, ",") != "p1,p2" {
+		t.Fatalf("highlighted panes = %v", highlighted)
+	}
+	_, ok, err = pickPane(panes, "p1", strings.NewReader("q"), &out, 80, 24, nil, nil)
 	if err != nil || ok {
 		t.Fatalf("cancel: ok=%v err=%v", ok, err)
+	}
+	_, ok, err = pickPane(panes, "p1", strings.NewReader("\x1b"), &out, 80, 24, nil, nil)
+	if err != nil || ok {
+		t.Fatalf("Esc cancel: ok=%v err=%v", ok, err)
 	}
 }
 

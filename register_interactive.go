@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -105,14 +106,16 @@ func pickPaneTTY(tty *os.File, panes []Pane, currentID string) (Pane, bool, erro
 	if err != nil || width < 30 || height < 8 {
 		width, height = 80, 24
 	}
+	highlight := newPaneHighlighter(mux)
+	defer highlight.Restore()
 	return pickPane(panes, currentID, tty, tty, width, height, func(p Pane) (string, error) {
 		return mux.DumpPane(p.ID, false)
-	})
+	}, highlight.Select)
 }
 
 // pickPane contains the interaction logic independently of terminal raw mode.
-// Up/down (or j/k) changes the highlighted pane, Enter confirms, and q exits.
-func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width, height int, preview func(Pane) (string, error)) (Pane, bool, error) {
+// Up/down (or j/k) changes the highlighted pane, Enter confirms, and Esc/q exits.
+func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width, height int, preview func(Pane) (string, error), highlight func(Pane) error) (Pane, bool, error) {
 	selected := 0
 	for i, p := range panes {
 		if p.ID == currentID {
@@ -128,7 +131,12 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 		_, err := io.ReadFull(in, b[:])
 		return b[0], err
 	}
+	lastHighlighted := ""
 	for {
+		if highlight != nil && panes[selected].ID != lastHighlighted {
+			_ = highlight(panes[selected]) // Picker remains usable if visual marking fails.
+			lastHighlighted = panes[selected].ID
+		}
 		var screen string
 		if preview != nil {
 			if s, err := preview(panes[selected]); err == nil {
@@ -154,15 +162,28 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 		case 'k':
 			selected = (selected + len(panes) - 1) % len(panes)
 		case 27:
+			// A lone Esc cancels; arrow keys arrive as Esc [ A/B/C/D.
+			if !inputReady(in, 80) {
+				return Pane{}, false, nil
+			}
 			prefix, err := readByte()
 			if err != nil {
+				if err == io.EOF {
+					return Pane{}, false, nil
+				}
 				return Pane{}, false, err
 			}
 			if prefix != '[' && prefix != 'O' {
 				continue
 			}
+			if !inputReady(in, 80) {
+				return Pane{}, false, nil
+			}
 			direction, err := readByte()
 			if err != nil {
+				if err == io.EOF {
+					return Pane{}, false, nil
+				}
 				return Pane{}, false, err
 			}
 			switch direction {
@@ -175,10 +196,22 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 	}
 }
 
+// inputReady waits only for a terminal file. Other readers (used by tests)
+// report EOF normally, so the picker can also be tested without a real TTY.
+func inputReady(in io.Reader, timeoutMS int) bool {
+	f, ok := in.(*os.File)
+	if !ok {
+		return true
+	}
+	fds := []unix.PollFd{{Fd: int32(f.Fd()), Events: unix.POLLIN}}
+	n, err := unix.Poll(fds, timeoutMS)
+	return err == nil && n > 0 && fds[0].Revents&unix.POLLIN != 0
+}
+
 func renderPanePicker(panes []Pane, selected int, preview string, width, height int) string {
 	var b strings.Builder
 	b.WriteString("\x1b[H\x1b[2J")
-	b.WriteString("Select a pane  ↑/↓ or j/k: move  Enter: select  q: cancel\r\n\r\n")
+	b.WriteString("Select a pane  ↑/↓ or j/k: move  Enter: select  Esc/q: cancel\r\n\r\n")
 	// Reserve room for the selected pane's preview on a small terminal.
 	visible := height / 2
 	if visible < 3 {
@@ -207,7 +240,7 @@ func renderPanePicker(panes []Pane, selected int, preview string, width, height 
 		if name == "" {
 			name = "pane"
 		}
-		line := fmt.Sprintf("%s[%s] %s  %s", marker, p.TabName, name, p.Cwd)
+		line := fmt.Sprintf("%s[%s] %s  %s  %s", marker, p.TabName, p.ID, name, p.Cwd)
 		b.WriteString(fitLine(line, width))
 		b.WriteString("\r\n")
 	}
