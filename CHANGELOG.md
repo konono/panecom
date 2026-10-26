@@ -1,5 +1,40 @@
 # Changelog
 
+## [2.0.0](https://github.com/konono/panecom/compare/v1.0.0...v2.0.0) (2026-10-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **whoami:** panecom whoami now prints labeled role, pane, and namespace lines by default. Use panecom whoami --role for the previous role-only output.
+
+### Features
+
+* interactive pane registration and namespace diagnostics ([509f26d](https://github.com/konono/panecom/commit/509f26d7083113c070e425546159c6a90210100f))
+* **namespace:** warn about live legacy registrations ([e9e3d87](https://github.com/konono/panecom/commit/e9e3d87371491bfc036b64344fdf36f73e2c0fb3))
+* portable profiles and guided team setup ([cac20f3](https://github.com/konono/panecom/commit/cac20f33c0d300df2e6845b1c400977668a2df92))
+* **profile:** load project config from root .panecom.yaml ([6da101e](https://github.com/konono/panecom/commit/6da101ea8fe9a3e6b4b937812a630cb831e8799d))
+* **register:** cancel with Esc and highlight selected pane ([f5bc351](https://github.com/konono/panecom/commit/f5bc3513c7351ebe60d876ec2648287ddc1b90bb))
+* **register:** navigate panes by screen position ([a95a932](https://github.com/konono/panecom/commit/a95a93287a9025b38460ec388496d24f1b9083e8))
+* **register:** select and name an existing pane interactively ([e75a23c](https://github.com/konono/panecom/commit/e75a23cd4b1fcd4da644c0b8a7503135d61dacac))
+* **skill:** add guided install and uninstall ([89789d4](https://github.com/konono/panecom/commit/89789d434fa667bc6cb5304d1d4063c75ee0924d))
+* **whoami:** show pane ID and registered namespace ([5963661](https://github.com/konono/panecom/commit/5963661c097ebd84778394e591253bfd8e994ca2))
+
+
+### Bug Fixes
+
+* **ci:** handle close and warning write results ([c66e0b4](https://github.com/konono/panecom/commit/c66e0b488a634ca91d82ac8e69af4892161da451))
+* **deploy:** replace multiline skill sections with awk input file ([4edc0a5](https://github.com/konono/panecom/commit/4edc0a5024381a8741ba77c6668661fe44099e3c))
+* **namespace:** refine legacy registration guidance ([c4cd6da](https://github.com/konono/panecom/commit/c4cd6da3ac1177b626b6fa26b3054dffc8349152))
+* **register:** address interactive picker review findings ([5a2a53b](https://github.com/konono/panecom/commit/5a2a53baa91d626b387aea742c0839b4879d276f))
+* **register:** limit visual picker to current tab ([b3e0c66](https://github.com/konono/panecom/commit/b3e0c66e59331220fb9b36ecba2b00a0d4cd6ccf))
+* **register:** read arrow sequences on macOS PTYs ([896bfd8](https://github.com/konono/panecom/commit/896bfd89986ddc95c5837811b5489158ae58e6d5))
+* **release:** report the version embedded in release binaries ([5e1727b](https://github.com/konono/panecom/commit/5e1727baa71397fedcdbcc43eb2f5587622d31b6))
+* **skill:** check deferred cleanup in lint ([f68fb8e](https://github.com/konono/panecom/commit/f68fb8ea4472e7578fffc28f449d7abb82d4f88c))
+* **skill:** deduplicate symlinked install destinations ([30cc5b9](https://github.com/konono/panecom/commit/30cc5b9b2d2b60c48244806280a8f46a468afa1a))
+* **skill:** preserve adopted files and permissions ([f72fa55](https://github.com/konono/panecom/commit/f72fa55f9acad2bdb29652af1f2acc7c18e851bf))
+* **whoami:** add role-only output and sync guidance ([c389944](https://github.com/konono/panecom/commit/c389944f63aff4ac0d92a36d78b85b2834b719a6))
+* **whoami:** show unknown for missing namespace metadata ([005292f](https://github.com/konono/panecom/commit/005292f51eb1f9a32c6d066490e6f20cd3416976))
+
 ## [1.0.0](https://github.com/konono/panecom/compare/v0.4.0...v1.0.0) (2026-10-26)
 
 
