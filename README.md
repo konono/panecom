@@ -97,7 +97,7 @@ m -> codex (/path/to/app)
 
 > 両方の pane は **同じセッション内**、**同じプロジェクト** から register してください。これが同じ namespace に所属する条件です。プロジェクトは register 時の作業ディレクトリから遡って判定されるので、リポジトリ内のどのディレクトリで register しても構いません。
 
-以前のバージョンで登録した pane は、サブディレクトリを namespace として記録したままの場合があります。`panecom list` は同じ state store にある生存中の旧登録を検知し、対象 pane で実行する `panecom register <role>` を案内します。role の解決に失敗した場合も同じ案内を表示します。検知だけでは登録を変更しません。別の state store に残った登録は検知対象外です。
+以前のバージョンで登録した pane は、サブディレクトリを namespace として記録したままの場合があります。`panecom list` は同じ state store にある生存中の旧登録を検知し、対象 pane で実行する `panecom register <role>`、または同じタブの別 pane から選ぶ `panecom register` を案内します。role の解決に失敗した場合も同じ案内を表示します。検知だけでは登録を変更しません。別の state store に残った登録、および `.git` や `.panecom` のマーカーが無く同じプロジェクトと判定できない登録は検知対象外です。
 
 4. 通信する:
 

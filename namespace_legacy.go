@@ -36,7 +36,10 @@ func legacyRegistrations(sRoot, session, anchor string) []legacyRegistration {
 			if role.Alive {
 				old := legacyRegistration{Anchor: oldAnchor, Role: role.Role, PaneID: role.PaneID}
 				if occupied, err := resolveRole(currentNs, role.Role); err == nil && occupied != role.PaneID {
-					old.ConflictPaneID = occupied
+					alive, checkErr := mux.PaneExists(session, occupied)
+					if checkErr != nil || alive {
+						old.ConflictPaneID = occupied
+					}
 				}
 				out = append(out, old)
 			}
@@ -55,9 +58,9 @@ type legacyRegistration struct {
 func warnLegacyRegistrations(w io.Writer, sRoot, session, anchor string) {
 	for _, old := range legacyRegistrations(sRoot, session, anchor) {
 		if old.ConflictPaneID != "" {
-			fmt.Fprintf(w, "panecom: old namespace %s has %s (%s), but %s already belongs to %s here; choose a different role before re-registering\n", old.Anchor, old.Role, old.PaneID, old.Role, old.ConflictPaneID)
+			fmt.Fprintf(w, "panecom: old namespace %s has %s (%s), but it belongs to %s here; choose a different role before re-registering\n", old.Anchor, old.Role, old.PaneID, old.ConflictPaneID)
 			continue
 		}
-		fmt.Fprintf(w, "panecom: old namespace %s still has %s (%s); run 'panecom register %s' in that pane to move it here\n", old.Anchor, old.Role, old.PaneID, old.Role)
+		fmt.Fprintf(w, "panecom: old namespace %s still has %s (%s); with that pane in this project, run 'panecom register %s' there or select it with 'panecom register' from its tab\n", old.Anchor, old.Role, old.PaneID, old.Role)
 	}
 }

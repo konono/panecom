@@ -50,8 +50,14 @@ func TestLegacyRegistrationWarningAndReregister(t *testing.T) {
 		}
 		warning.Reset()
 		warnLegacyRegistrations(&warning, sRoot, "fake", namespaceAnchor())
-		if got := warning.String(); !strings.Contains(got, "already belongs to p_new") || strings.Contains(got, "run 'panecom register d'") {
+		if got := warning.String(); !strings.Contains(got, "it belongs to p_new") || strings.Contains(got, "run 'panecom register d'") {
 			t.Fatalf("role collision warning = %q", got)
+		}
+		f.dead["p_new"] = true
+		warning.Reset()
+		warnLegacyRegistrations(&warning, sRoot, "fake", namespaceAnchor())
+		if got := warning.String(); !strings.Contains(got, "panecom register d") || strings.Contains(got, "it belongs to") {
+			t.Fatalf("stale role should not block re-registering: %q", got)
 		}
 		if err := os.Remove(rootRole); err != nil {
 			t.Fatal(err)
