@@ -40,13 +40,17 @@ ${marker_end}"
 if [ -f "$agents_md" ]; then
   if grep -q "$marker_start" "$agents_md"; then
     # Replace existing section
+    # Note: awk -v cannot pass multi-line strings; use a temp file with getline instead
     tmpfile=$(mktemp)
-    awk -v start="$marker_start" -v end="$marker_end" -v new="$panecom_section" '
-      $0 == start { print new; skip=1; next }
+    section_file=$(mktemp)
+    printf '%s\n' "$panecom_section" > "$section_file"
+    awk -v start="$marker_start" -v end="$marker_end" -v newfile="$section_file" '
+      $0 == start { while ((getline line < newfile) > 0) print line; skip=1; next }
       $0 == end { skip=0; next }
       !skip { print }
     ' "$agents_md" > "$tmpfile"
     mv "$tmpfile" "$agents_md"
+    rm -f "$section_file"
   else
     # Append
     printf "\n%s\n" "$panecom_section" >> "$agents_md"
@@ -62,12 +66,15 @@ if [ -d "$HOME/.codex" ] || mkdir -p "$HOME/.codex" 2>/dev/null; then
   if [ -f "$codex_global" ]; then
     if grep -q "$marker_start" "$codex_global"; then
       tmpfile=$(mktemp)
-      awk -v start="$marker_start" -v end="$marker_end" -v new="$panecom_section" '
-        $0 == start { print new; skip=1; next }
+      section_file=$(mktemp)
+      printf '%s\n' "$panecom_section" > "$section_file"
+      awk -v start="$marker_start" -v end="$marker_end" -v newfile="$section_file" '
+        $0 == start { while ((getline line < newfile) > 0) print line; skip=1; next }
         $0 == end { skip=0; next }
         !skip { print }
       ' "$codex_global" > "$tmpfile"
       mv "$tmpfile" "$codex_global"
+      rm -f "$section_file"
     else
       printf "\n%s\n" "$panecom_section" >> "$codex_global"
     fi
