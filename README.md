@@ -117,6 +117,7 @@ namespace: /path/to/app
 panecom resolve reviewer                    # → terminal_N (Zellij) / %N (tmux)
 panecom send reviewer "コードをレビューしてください"  # Pane B のエージェントに送られる
 panecom dump reviewer                       # Pane B の現在画面を取得
+panecom focus reviewer                      # Pane B に移動する
 ```
 
 > **注意**: `send` は対象 pane に文字列 + Enter を注入します。対象が素のシェルの場合、送信内容がコマンドとして実行されます。エージェントの入力として使うか、`exec` コマンドを使ってください。
@@ -144,7 +145,7 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | `unsupported multiplexer: X` | 未対応の `--mux` 値 | `zellij` または `tmux` を指定 |
 | `ZELLIJ_PANE_ID not set` / `TMUX_PANE not set` | pane ID が取得できない | マルチプレクサの terminal pane 内で実行する |
 | `role 'X' is not registered in namespace <path>` | 相手が未登録 or 別 namespace | メッセージの `<path>` が相手の register 先と一致するか確認し、同じプロジェクトから register し直す |
-| `role 'X' points to stale pane` | 相手の pane が閉じられた | 相手側で再度 `panecom register X` |
+| `role 'X' points to stale pane` | 相手の pane が閉じられた | 相手側で再度 `panecom register X`（登録自体はこの時点で削除される） |
 
 ## コマンド一覧
 
@@ -154,10 +155,12 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | `register` | pane を画面で選び、role 名を入力して登録 |
 | `register <role>` | 現在の pane を role として登録 |
 | `whoami [--role]` | 現在の pane の role、pane ID、登録時の namespace を表示（`--role` は role のみ） |
-| `list [--all \| <project>]` | role 一覧を表示（自分 / リンク先 / 全部） |
+| `list [--all \| <project>] [--stale]` | role 一覧を表示（自分 / リンク先 / 全部）。stale な role は既定で非表示、`--stale` で表示 |
+| `cleanup [--all] [-n]` | pane が消えた role の登録と、終了したセッションの state を削除（`--all` はリンク先の role も、`-n` は dry run） |
 | `link [-f] <project> <path>` | 別プロジェクトをリンク（引数なしでリンク一覧） |
 | `unlink <project>` | リンクを削除 |
 | `resolve <role>` | role → pane ID を解決 |
+| `focus <role>` | 対象 pane にフォーカスを移動 |
 | `open [-d right\|down] <role>` | 新しい pane を開いて role を登録 |
 | `dump [--full] <role>` | 対象 pane の画面を取得 |
 | `send [--no-verify] [--verify-timeout N] <role> <msg>` | 対象 pane にメッセージを送信（配信確認あり） |
@@ -348,6 +351,46 @@ $ panecom list --all      # 自分 + 全リンク先
 $ panecom link            # リンクの一覧（role は引かない）
 $ panecom unlink mcp
 ```
+
+### stale な role の扱い
+
+pane が閉じられた role は stale になります。マルチプレクサを再起動すると pane ID が一斉に振り直されるため、その namespace の role がまとめて stale になることがあります。`list` は stale を既定で隠し、件数だけ表示します。
+
+```bash
+$ panecom list
+/path/to/project
+  d            terminal_516
+  (4 stale entries hidden: panecom list --stale, panecom cleanup)
+
+$ panecom list --stale    # 中身を確認
+$ panecom cleanup -n      # 消す対象を確認（削除しない）
+$ panecom cleanup         # 削除
+```
+
+`send` / `resolve` / `dump` / `exec` / `share` / `focus` は stale な role に当たった時点でその登録を自動的に削除します。`cleanup` は誰も触らないまま残った分をまとめて片付けるためのものです。
+
+pane の生存確認そのものに失敗した role は `(unknown)` と表示され、削除されません。マルチプレクサが応答しないだけで全 role が消えるのを防ぐためです。
+
+### 終了したセッションの state
+
+state はセッション単位で `.panecom/sessions/<hash>/` に置かれます。マルチプレクサを再起動すると、古いセッションのディレクトリがそのまま残ります。`list` は現在のセッションしか見ないので、この分は一覧に現れないまま溜まります。
+
+`cleanup` は role の掃除に加えて、実行中でないセッションのディレクトリを削除します。
+
+```bash
+$ panecom cleanup -n
+/path/to/project
+  would remove developer    terminal_268
+  would remove session lucky-drum
+  would remove session quiet-zebra
+4 stale entries, 2 dead sessions would be removed
+```
+
+- Zellij の EXITED セッション（attach で resurrect できる状態）は「実行中でない」として扱います。resurrect しても pane ID は振り直されるため、古いマッピングは使えません
+- 現在のセッションは、マルチプレクサの一覧に出てこなくても削除しません
+- セッション一覧の取得に失敗した場合は、セッションの削除を丸ごと見送ります
+- 別のマルチプレクサのセッション（tmux 下で作られた state を Zellij から見た場合など）は、生存確認ができないため対象外です
+- 対象は自分のプロジェクトの store のみです。`--all` はリンク先の role を対象に加えますが、リンク先の store のセッション state には触れません
 
 #### 性質
 

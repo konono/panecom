@@ -426,3 +426,72 @@ profiles:
 var _ = os.PathSeparator
 var _ = fmt.Sprint
 var _ = filepath.Join
+
+func TestZellijListPanesIsCachedWithinOneCommand(t *testing.T) {
+	r := newFakeRunner()
+	r.Stub([]byte(`[{"id":1,"tab_id":0,"pane_command":"zsh"},{"id":2,"tab_id":0,"pane_command":"zsh"}]`),
+		"zellij", "action", "list-panes", "--json", "--all")
+	z := &ZellijMux{runner: r}
+
+	// Checking several roles is the common case and must not pay one
+	// multiplexer round trip per role.
+	for _, id := range []string{"terminal_1", "terminal_2", "terminal_9"} {
+		if _, err := z.PaneExists("s", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countCalls(r, "list-panes"); n != 1 {
+		t.Errorf("list-panes called %d times, want 1", n)
+	}
+
+	// Creating a pane changes the set, so the next read must go out again.
+	r.Stub([]byte("terminal_3\n"), "zellij", "action", "new-pane", "--near-current-pane", "--cwd", "/tmp", "--direction", "right")
+	if _, err := z.NewPane("terminal_1", "/tmp", "right"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := z.PaneExists("s", "terminal_1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := countCalls(r, "list-panes"); n != 2 {
+		t.Errorf("list-panes called %d times after NewPane, want 2", n)
+	}
+}
+
+func countCalls(r *fakeRunner, argSubstring string) int {
+	n := 0
+	for _, c := range r.calls {
+		if strings.Contains(strings.Join(c.Args, " "), argSubstring) {
+			n++
+		}
+	}
+	return n
+}
+
+func TestZellijListSessionsSkipsExited(t *testing.T) {
+	r := newFakeRunner()
+	r.Stub([]byte("quiet-zebra [Created 25days ago] (EXITED - attach to resurrect)\n"+
+		"ope [Created 7days ago] (current)\n"+
+		"sparkling-bee [Created 1h ago]\n"),
+		"zellij", "list-sessions", "--no-formatting")
+	z := &ZellijMux{runner: r}
+
+	got, err := z.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ope", "sparkling-bee"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("sessions = %v, want %v (exited sessions have no live panes)", got, want)
+	}
+}
+
+func TestZellijListSessionsRejectsUnreadableOutput(t *testing.T) {
+	r := newFakeRunner()
+	r.Stub([]byte("\n"), "zellij", "list-sessions", "--no-formatting")
+	z := &ZellijMux{runner: r}
+	// We run inside a session, so "nothing is running" means the output was
+	// not understood. Reporting none would invite deleting live state.
+	if got, err := z.ListSessions(); err == nil {
+		t.Errorf("want an error for unparseable output, got %v", got)
+	}
+}

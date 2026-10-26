@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -251,10 +252,22 @@ func externalNamespaceDir(session, targetAnchor string) string {
 	return filepath.Join(sessionRootIn(store, mux.Kind(), session), "namespaces", hashString(targetAnchor))
 }
 
+// paneState distinguishes a pane that is gone from one we failed to ask about.
+// Only the first is safe to retire: a multiplexer that did not answer makes
+// every role look dead at once, and deleting on that signal would wipe a whole
+// session's registrations because one command failed.
+type paneState int
+
+const (
+	paneAlive paneState = iota
+	paneDead
+	paneUnknown
+)
+
 type roleEntry struct {
 	Role   string
 	PaneID string
-	Alive  bool
+	State  paneState
 }
 
 // listRoles reports the roles of a namespace together with pane liveness.
@@ -272,10 +285,31 @@ func listRoles(session, nsDir string) []roleEntry {
 		if err != nil || paneID == "" {
 			continue
 		}
-		alive, err := mux.PaneExists(session, paneID)
-		out = append(out, roleEntry{Role: e.Name(), PaneID: paneID, Alive: err == nil && alive})
+		out = append(out, roleEntry{Role: e.Name(), PaneID: paneID, State: paneStateOf(session, paneID)})
 	}
 	return out
+}
+
+func paneStateOf(session, paneID string) paneState {
+	alive, err := mux.PaneExists(session, paneID)
+	switch {
+	case err != nil:
+		return paneUnknown
+	case alive:
+		return paneAlive
+	default:
+		return paneDead
+	}
+}
+
+// retireRole drops a role whose pane is gone, along with the pane's own
+// records. The mapping lives beside the namespace, which for a linked project
+// is the target's store rather than ours.
+func retireRole(nsDir, role, paneID string) {
+	panesDir := filepath.Join(filepath.Dir(filepath.Dir(nsDir)), "panes")
+	_ = os.Remove(filepath.Join(nsDir, "roles", role))
+	_ = os.Remove(filepath.Join(panesDir, paneID))
+	_ = os.Remove(filepath.Join(panesDir, paneID+".bin"))
 }
 
 // describeNamespace names the namespace that was actually searched. The anchor
@@ -484,12 +518,7 @@ func resolveRoleForCommand(qualified string) string {
 		die(fmt.Sprintf("failed to check pane '%s': %s", targetPaneID, err.Error()))
 	}
 	if !exists {
-		// The pane mapping lives beside the namespace, which for a linked
-		// project is the target's store rather than ours.
-		panesDir := filepath.Join(filepath.Dir(filepath.Dir(nsDir)), "panes")
-		_ = os.Remove(filepath.Join(nsDir, "roles", role))
-		_ = os.Remove(filepath.Join(panesDir, targetPaneID))
-		_ = os.Remove(filepath.Join(panesDir, targetPaneID+".bin"))
+		retireRole(nsDir, role, targetPaneID)
 		die(fmt.Sprintf("role '%s' points to stale pane '%s'", role, targetPaneID))
 	}
 
@@ -535,21 +564,43 @@ func expandPathFrom(base, path string) (string, error) {
 func countAlive(entries []roleEntry) int {
 	n := 0
 	for _, e := range entries {
-		if e.Alive {
+		if e.State == paneAlive {
 			n++
 		}
 	}
 	return n
 }
 
-func printRoles(entries []roleEntry) {
+// printRoles hides dead roles by default. A restarted multiplexer invalidates
+// every pane ID at once, so the common stale listing is a wall of entries that
+// say nothing beyond "register again" -- which the next send would do by
+// itself. The count keeps the diagnostic within reach.
+func printRoles(w io.Writer, entries []roleEntry, showStale bool) {
+	hidden := 0
 	for _, e := range entries {
-		state := ""
-		if !e.Alive {
-			state = " (stale)"
+		if e.State == paneDead && !showStale {
+			hidden++
+			continue
 		}
-		fmt.Printf("  %-12s %s%s\n", e.Role, e.PaneID, state)
+		state := ""
+		switch e.State {
+		case paneDead:
+			state = " (stale)"
+		case paneUnknown:
+			state = " (unknown)"
+		}
+		fmt.Fprintf(w, "  %-12s %s%s\n", e.Role, e.PaneID, state)
 	}
+	if hidden > 0 {
+		fmt.Fprintf(w, "  (%s hidden: panecom list --stale, panecom cleanup)\n", plural(hidden, "stale entry", "stale entries"))
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // linkProject records alias and reports what it reached. Verifying the target
@@ -595,7 +646,9 @@ func cmdLink(alias, path string, force bool) {
 		die(err.Error())
 	}
 	fmt.Printf("%s -> %s\n", alias, target)
-	printRoles(roles)
+	// Linking is the moment to see everything: with --force the target may be
+	// entirely stale, and hiding that would print a link with no roles at all.
+	printRoles(os.Stdout, roles, true)
 }
 
 func cmdLinkList() {
@@ -644,7 +697,7 @@ func cmdUnlink(alias string) {
 
 // cmdList shows the roles of this namespace, of one linked project, or of all
 // of them.
-func cmdList(alias string, all bool) {
+func cmdList(alias string, all bool, showStale bool) {
 	session, sRoot := requireSession()
 	nsHash := currentNamespaceHash(sRoot, currentPaneIDOrEmpty())
 
@@ -654,13 +707,13 @@ func cmdList(alias string, all bool) {
 			die(err.Error())
 		}
 		fmt.Printf("%s -> %s\n", alias, target)
-		printRoles(listRoles(session, externalNamespaceDir(session, target)))
+		printRoles(os.Stdout, listRoles(session, externalNamespaceDir(session, target)), showStale)
 		return
 	}
 
 	own := filepath.Join(sRoot, "namespaces", nsHash)
 	fmt.Println(namespaceLabel(own))
-	printRoles(listRoles(session, own))
+	printRoles(os.Stdout, listRoles(session, own), showStale)
 	warnLegacyRegistrations(os.Stderr, sRoot, session, namespaceAnchor())
 
 	if !all {
@@ -679,13 +732,175 @@ func cmdList(alias string, all bool) {
 			continue
 		}
 		fmt.Printf("\n%s -> %s\n", e.Name(), target)
-		printRoles(listRoles(session, externalNamespaceDir(session, target)))
+		printRoles(os.Stdout, listRoles(session, externalNamespaceDir(session, target)), showStale)
+	}
+}
+
+// cleanupNamespace retires every role whose pane is provably gone. Roles whose
+// pane could not be checked are reported and kept: an unreachable multiplexer
+// is indistinguishable from a closed pane at the call site, and the wrong guess
+// here costs the user every registration in the session.
+func cleanupNamespace(session, nsDir string, dryRun bool) (removed []roleEntry, unknown int) {
+	for _, e := range listRoles(session, nsDir) {
+		switch e.State {
+		case paneUnknown:
+			unknown++
+		case paneDead:
+			if !dryRun {
+				retireRole(nsDir, e.Role, e.PaneID)
+			}
+			removed = append(removed, e)
+		}
+	}
+	return removed, unknown
+}
+
+type cleanupTarget struct {
+	label string
+	nsDir string
+}
+
+type deadSession struct {
+	name string
+	dir  string
+}
+
+// deadSessionDirs finds this store's session directories whose session is no
+// longer running. Each directory keeps the whole pane and namespace state of
+// one session, so a multiplexer restart leaves the entire tree behind without
+// ever showing up in list, which is scoped to the current session.
+//
+// Only directories belonging to the running multiplexer are considered. The
+// directory name is the hash of the session key, so recomputing it from the
+// recorded name both identifies the multiplexer and rejects a directory whose
+// marker does not match its own name.
+func deadSessionDirs(store, currentSession string) ([]deadSession, error) {
+	running, err := mux.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+	alive := make(map[string]bool, len(running))
+	for _, name := range running {
+		alive[name] = true
+	}
+	// Our own session must be running whatever the multiplexer reports, and
+	// deleting the state we are using would be the worst possible outcome.
+	alive[currentSession] = true
+
+	sessionsDir := filepath.Join(store, "sessions")
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return nil, nil
+	}
+	var out []deadSession
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(sessionsDir, e.Name())
+		name, err := readFile(filepath.Join(dir, ".session"))
+		if err != nil || name == "" {
+			continue
+		}
+		if sessionRootIn(store, mux.Kind(), name) != dir {
+			continue
+		}
+		if !alive[name] {
+			out = append(out, deadSession{name: name, dir: dir})
+		}
+	}
+	return out, nil
+}
+
+// cmdCleanup removes stale roles. It defaults to this project's namespace:
+// a linked project's roles live in that project's own store, and reaching into
+// it from here should be asked for rather than assumed.
+func cmdCleanup(all bool, dryRun bool) {
+	session, sRoot := requireSession()
+	nsHash := currentNamespaceHash(sRoot, currentPaneIDOrEmpty())
+
+	own := filepath.Join(sRoot, "namespaces", nsHash)
+	targets := []cleanupTarget{{label: namespaceLabel(own), nsDir: own}}
+
+	if all {
+		entries, _ := os.ReadDir(externalsDir(nsHash))
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			target, err := readFile(filepath.Join(externalsDir(nsHash), e.Name()))
+			if err != nil {
+				continue
+			}
+			targets = append(targets, cleanupTarget{
+				label: fmt.Sprintf("%s -> %s", e.Name(), target),
+				nsDir: externalNamespaceDir(session, target),
+			})
+		}
+	}
+
+	verb := "removed"
+	if dryRun {
+		verb = "would remove"
+	}
+	total, unknown := 0, 0
+	for _, t := range targets {
+		removed, unsure := cleanupNamespace(session, t.nsDir, dryRun)
+		unknown += unsure
+		total += len(removed)
+		if len(removed) == 0 {
+			continue
+		}
+		fmt.Println(t.label)
+		for _, e := range removed {
+			fmt.Printf("  %s %-12s %s\n", verb, e.Role, e.PaneID)
+		}
+	}
+
+	// Session directories hold the state of other sessions in this store, so
+	// they are swept for the store we own rather than for a linked project's.
+	sessions, sessionErr := deadSessionDirs(stateRoot(), session)
+	for _, s := range sessions {
+		if !dryRun {
+			if err := os.RemoveAll(s.dir); err != nil {
+				fmt.Fprintf(os.Stderr, "panecom: failed to remove session '%s': %s\n", s.name, err.Error())
+				continue
+			}
+		}
+		fmt.Printf("  %s session %s\n", verb, s.name)
+	}
+
+	switch {
+	case total == 0 && len(sessions) == 0:
+		fmt.Println("nothing to clean up")
+	case dryRun:
+		fmt.Printf("%s, %s would be removed\n",
+			plural(total, "stale entry", "stale entries"), plural(len(sessions), "dead session", "dead sessions"))
+	default:
+		fmt.Printf("%s, %s removed\n",
+			plural(total, "stale entry", "stale entries"), plural(len(sessions), "dead session", "dead sessions"))
+	}
+	if unknown > 0 {
+		fmt.Fprintf(os.Stderr, "panecom: %s could not be checked and were kept (is the multiplexer responding?)\n",
+			plural(unknown, "role", "roles"))
+	}
+	if sessionErr != nil {
+		fmt.Fprintf(os.Stderr, "panecom: dead sessions were left alone: %s\n", sessionErr.Error())
 	}
 }
 
 func cmdResolve(role string) {
 	paneID := resolveRoleForCommand(role)
 	fmt.Println(paneID)
+}
+
+// cmdFocus moves the multiplexer's focus to a role's pane. It accepts the same
+// role spelling as send, so anything listed can be jumped to.
+func cmdFocus(role string) {
+	paneID := resolveRoleForCommand(role)
+	if err := mux.FocusPane(paneID); err != nil {
+		die(fmt.Sprintf("failed to focus '%s': %s", role, err.Error()))
+	}
 }
 
 func cmdDump(role string, full bool, lines int) {
@@ -1564,11 +1779,17 @@ Commands:
   register <role>                Register current pane as <role>
   whoami [--role]                Show current role, pane ID, and namespace
                                  --role prints only the role for scripts
-  list [--all | <project>]       List roles here, or in a linked project
+  list [--all | <project>] [--stale]
+                                 List roles here, or in a linked project
+                                 Stale roles are hidden unless --stale
+  cleanup [--all] [-n]           Remove roles whose pane is gone, and the
+                                 state of sessions no longer running
+                                 --all includes linked projects, -n dry run
   link [-f] <project> <path>     Link a project so its roles can be addressed
                                  as <project>/<role>; no args lists links
   unlink <project>               Remove a link
   resolve <role>                 Show pane ID for <role>
+  focus <role>                   Move multiplexer focus to <role>'s pane
   open [-d right|down] <role>    Open new pane and register as <role>
   dump [--full] [-l N] <role>    Dump screen of <role>'s pane
   send [--no-verify] [--verify-timeout N] <role> <msg>
@@ -1687,10 +1908,13 @@ func main() {
 		cmdUnlink(args[1])
 	case "list":
 		all := false
+		showStale := false
 		alias := ""
 		for _, a := range args[1:] {
 			if a == "--all" {
 				all = true
+			} else if a == "--stale" {
+				showStale = true
 			} else if alias == "" {
 				alias = a
 			} else {
@@ -1700,7 +1924,21 @@ func main() {
 		if alias != "" && all {
 			usage()
 		}
-		cmdList(alias, all)
+		cmdList(alias, all, showStale)
+	case "cleanup":
+		all := false
+		dryRun := false
+		for _, a := range args[1:] {
+			switch a {
+			case "--all":
+				all = true
+			case "-n", "--dry-run":
+				dryRun = true
+			default:
+				usage()
+			}
+		}
+		cmdCleanup(all, dryRun)
 	case "open":
 		direction := ""
 		binPath := ""
@@ -1726,6 +1964,11 @@ func main() {
 			usage()
 		}
 		cmdResolve(args[1])
+	case "focus":
+		if len(args) != 2 {
+			usage()
+		}
+		cmdFocus(args[1])
 	case "dump":
 		full := false
 		lines := 0

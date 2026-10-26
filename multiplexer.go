@@ -19,11 +19,41 @@ type Pane struct {
 	Height  int
 }
 
+// paneCache memoises the pane list for the lifetime of one command. Checking
+// liveness role by role otherwise spawns a multiplexer query per role, which a
+// namespace with dozens of registrations pays for on every list. A panecom
+// process is short lived and only changes the pane set through NewPane/NewTab,
+// so those paths invalidate the cache and read the multiplexer directly.
+// The key keeps a cache filled for one session from answering for another.
+type paneCache struct {
+	key    string
+	panes  []Pane
+	loaded bool
+}
+
+func (c *paneCache) get(key string, load func() ([]Pane, error)) ([]Pane, error) {
+	if c.loaded && c.key == key {
+		return c.panes, nil
+	}
+	panes, err := load()
+	if err != nil {
+		return nil, err
+	}
+	c.key, c.panes, c.loaded = key, panes, true
+	return panes, nil
+}
+
+func (c *paneCache) invalidate() { c.key, c.panes, c.loaded = "", nil, false }
+
 type Multiplexer interface {
 	Kind() string
 	SessionName() (string, error)
 	CurrentPaneID() (string, error)
 	ListPanes(sessionName string) ([]Pane, error)
+	// ListSessions names the sessions that are currently running. Sessions a
+	// multiplexer keeps around in an exited state are not running: their panes
+	// are gone and their IDs do not survive a resurrect.
+	ListSessions() ([]string, error)
 	PaneExists(sessionName string, paneID string) (bool, error)
 	NewPane(targetPaneID string, cwd string, direction string) (paneID string, err error)
 	NewTab(name string, cwd string) (tabID string, initialPaneID string, err error)

@@ -10,6 +10,7 @@ import (
 
 type TmuxMux struct {
 	runner CommandRunner
+	cache  paneCache
 }
 
 func (t *TmuxMux) Kind() string { return "tmux" }
@@ -38,6 +39,10 @@ func (t *TmuxMux) CurrentPaneID() (string, error) {
 }
 
 func (t *TmuxMux) ListPanes(sessionName string) ([]Pane, error) {
+	return t.cache.get(sessionName, func() ([]Pane, error) { return t.listPanes(sessionName) })
+}
+
+func (t *TmuxMux) listPanes(sessionName string) ([]Pane, error) {
 	target := sessionName
 	if target == "" {
 		var err error
@@ -79,6 +84,23 @@ func (t *TmuxMux) ListPanes(sessionName string) ([]Pane, error) {
 	return panes, nil
 }
 
+func (t *TmuxMux) ListSessions() ([]string, error) {
+	out, err := t.runner.Output("tmux", "list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names = append(names, line)
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("'tmux list-sessions' returned no sessions")
+	}
+	return names, nil
+}
+
 func (t *TmuxMux) PaneExists(sessionName string, paneID string) (bool, error) {
 	panes, err := t.ListPanes(sessionName)
 	if err != nil {
@@ -93,6 +115,7 @@ func (t *TmuxMux) PaneExists(sessionName string, paneID string) (bool, error) {
 }
 
 func (t *TmuxMux) NewPane(targetPaneID string, cwd string, direction string) (string, error) {
+	defer t.cache.invalidate()
 	args := []string{"split-window", "-t", targetPaneID, "-c", cwd, "-P", "-F", "#{pane_id}"}
 	if direction == "down" {
 		args = append(args, "-v")
@@ -111,6 +134,7 @@ func (t *TmuxMux) NewPane(targetPaneID string, cwd string, direction string) (st
 }
 
 func (t *TmuxMux) NewTab(name string, cwd string) (string, string, error) {
+	defer t.cache.invalidate()
 	out, err := t.runner.Output("tmux", "new-window", "-n", name, "-c", cwd, "-P", "-F", "#{window_id}\t#{pane_id}")
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create new window: %w", err)
@@ -123,6 +147,7 @@ func (t *TmuxMux) NewTab(name string, cwd string) (string, string, error) {
 }
 
 func (t *TmuxMux) NewPaneInTab(tabID string, cwd string, direction string) (string, error) {
+	defer t.cache.invalidate()
 	args := []string{"split-window", "-t", tabID, "-c", cwd, "-P", "-F", "#{pane_id}"}
 	if direction == "down" {
 		args = append(args, "-v")

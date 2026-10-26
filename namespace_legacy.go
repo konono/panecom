@@ -33,7 +33,7 @@ func legacyRegistrations(sRoot, session, anchor string) []legacyRegistration {
 			continue
 		}
 		for _, role := range listRoles(session, nsDir) {
-			if role.Alive {
+			if role.State == paneAlive {
 				old := legacyRegistration{Anchor: oldAnchor, Role: role.Role, PaneID: role.PaneID}
 				if occupied, err := resolveRole(currentNs, role.Role); err == nil && occupied != role.PaneID {
 					alive, checkErr := mux.PaneExists(session, occupied)
