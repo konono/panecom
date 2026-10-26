@@ -7,13 +7,17 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
-const escapeSequenceTimeoutMS = 200
+// Esc is also the prefix of arrow keys, so wait briefly before treating it
+// as cancellation. Select works on macOS PTYs, where Poll can report NVAL
+// despite readable bytes.
+const escapeSequenceTimeoutMS = 500
 
 // registerSelectedPane registers an existing pane using that pane's working
 // directory. The command runs in the caller's pane; nothing is typed into the
@@ -226,9 +230,22 @@ func inputReady(in io.Reader, timeoutMS int) bool {
 	if !ok {
 		return true
 	}
-	fds := []unix.PollFd{{Fd: int32(f.Fd()), Events: unix.POLLIN}}
-	n, err := unix.Poll(fds, timeoutMS)
-	return err == nil && n > 0 && fds[0].Revents&unix.POLLIN != 0
+	fd := int(f.Fd())
+	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+		var readSet unix.FdSet
+		readSet.Set(fd)
+		timeout := unix.NsecToTimeval(remaining.Nanoseconds())
+		n, err := unix.Select(fd+1, &readSet, nil, nil, &timeout)
+		if err == unix.EINTR {
+			continue
+		}
+		return err == nil && n > 0 && readSet.IsSet(fd)
+	}
 }
 
 func renderPanePicker(panes []Pane, selected int, preview string, width, height int) string {

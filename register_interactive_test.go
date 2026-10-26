@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPickPaneSelectsNextAndCanCancel(t *testing.T) {
@@ -37,6 +38,26 @@ func TestPickPaneSelectsNextAndCanCancel(t *testing.T) {
 	_, ok, err = pickPane(panes, "p1", strings.NewReader("\x1b"), &out, 80, 24, nil, nil)
 	if err != nil || ok {
 		t.Fatalf("Esc cancel: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestPickPaneDelayedArrowSequence(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	go func() {
+		_, _ = writer.Write([]byte{27})
+		time.Sleep(250 * time.Millisecond)
+		_, _ = writer.Write([]byte("[B\r"))
+	}()
+	panes := []Pane{{ID: "p1"}, {ID: "p2"}}
+	var out bytes.Buffer
+	selected, ok, err := pickPane(panes, "p1", reader, &out, 80, 24, nil, nil)
+	if err != nil || !ok || selected.ID != "p2" {
+		t.Fatalf("delayed arrow: selected=%+v ok=%v err=%v", selected, ok, err)
 	}
 }
 
