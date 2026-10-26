@@ -22,7 +22,9 @@ var rolePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 var mux Multiplexer
 
-func die(msg string) {
+// die is a variable so that tests can observe a refusal instead of taking
+// the process down with it.
+var die = func(msg string) {
 	fmt.Fprintf(os.Stderr, "panecom: %s\n", msg)
 	os.Exit(1)
 }
@@ -1090,14 +1092,24 @@ func cmdTell(role, message string, verify bool, verifyTimeout float64) {
 	paneID := resolveRoleForCommand(role)
 	// The header is its own line so that verifyFragment, which takes the last
 	// non-empty line, still samples the message rather than the header.
-	body := fmt.Sprintf("[panecom:from=%s]\n%s", fromRole, message)
 	// A role name only resolves inside one namespace. Reaching another
 	// project means the recipient cannot answer "from=X" by name: their own
 	// namespace either has no X, or has a different agent under that name.
 	// Carry the project so they can link back to it and reply.
-	if alias, _ := splitQualifiedRole(role); alias != "" && fromAnchor != "" {
-		body = fmt.Sprintf("[panecom:from=%s project=%s]\n%s", fromRole, fromAnchor, message)
+	header := fmt.Sprintf("[panecom:from=%s]", fromRole)
+	if alias, _ := splitQualifiedRole(role); alias != "" {
+		if fromAnchor == "" {
+			// Without it the recipient would answer a role name that means
+			// something else in their project, so refuse rather than send
+			// something that invites a misdelivery.
+			die("cannot tell '" + role + "': this pane's project is unknown, so the recipient would have no way to reply (re-register with 'panecom register " + fromRole + "')")
+			return
+		}
+		// The project goes on its own line: a path may contain spaces, and a
+		// line boundary delimits it without the reader having to split fields.
+		header += fmt.Sprintf("\n[panecom:project=%s]", fromAnchor)
 	}
+	body := fmt.Sprintf("%s\n%s", header, message)
 	code, screen, reason, err := sendAndVerify(role, paneID, body, verify, verifyTimeout)
 	if err != nil {
 		die(fmt.Sprintf("failed to tell '%s': %s", role, err.Error()))

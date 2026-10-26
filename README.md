@@ -139,14 +139,17 @@ $ panecom tell reviewer "レビューをお願いします"
 #   レビューをお願いします
 ```
 
-別プロジェクトの相手（`<alias>/<role>`）に送ると、ヘッダに自分のプロジェクトのパスも入ります。role 名は namespace の中でしか通用しないため、これが無いと相手は返信先を解決できません。
+別プロジェクトの相手（`<alias>/<role>`）に送ると、ヘッダ 2 行目に自分のプロジェクトのパスが入ります。role 名は namespace の中でしか通用しないため、これが無いと相手は返信先を解決できません。
 
 ```
-[panecom:from=developer project=/path/to/myproject]
+[panecom:from=developer]
+[panecom:project=/path/to/my project]
 レビューをお願いします
 ```
 
-受け取った側は `panecom link <alias> /path/to/myproject` してから `panecom tell <alias>/developer` で返します。`project=` 付きのヘッダに role 名だけで返すと、自分のプロジェクトの同名 role に送ってしまいます。
+受け取った側は `panecom link <alias> "/path/to/my project"` してから `panecom tell <alias>/developer` で返します。role 名だけで返すと、自分のプロジェクトの同名 role に送ってしまいます。
+
+ヘッダは 1 行に 1 つの値を置き、`[panecom:<キー>=` と行末の `]` の間が値です。パスに空白が含まれても読み取れるよう、空白では区切りません。自分のプロジェクトを特定できない場合、`tell` は送信せずエラーになります。
 
 `send` は汎用のプリミティブなのでヘッダを付けません。シェルや TUI を相手にしたときに混ざると壊れるためです。逆にエージェント宛に `send` を使うと送信者が付かず、相手は返信先を判断できません。
 
