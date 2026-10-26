@@ -593,3 +593,91 @@ func TestSkillSyncCheckRefusesAMissingFile(t *testing.T) {
 		t.Fatal("a missing file passed the check")
 	}
 }
+
+// A Claude skill file is the skill in full, not a block. Running the block
+// logic over it would append a second copy in the other format -- and doing
+// that to .claude/skills/panecom.md, the embedded source, would carry the
+// growth into the next build.
+func TestSkillSyncRefusesFilesItCannotMaintain(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name    string
+		file    string
+		content string
+	}{
+		{"claude skill file", "Claude Skill.md", embeddedSkill},
+		{"unrelated file", "notes.md", "# notes\n\njust text\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.file)
+			if err := os.WriteFile(path, []byte(tc.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			for _, check := range []bool{true, false} {
+				if err := cmdSkillSync([]string{path}, check); err == nil {
+					t.Fatalf("check=%v was accepted", check)
+				}
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != tc.content {
+				t.Errorf("the file was modified:\n%s", got)
+			}
+		})
+	}
+}
+
+// sync writes the file, so the manifest has to follow: uninstall compares the
+// block against what it recorded and refuses anything else, which would make
+// this command the thing that breaks install and uninstall.
+func TestSkillSyncKeepsTheManifestUsable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	section, err := skillSection()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(home, "project", "AGENTS.md")
+	stale := strings.Replace(section, "# panecom", "# panecom (older)", 1)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# House\n\n"+stale+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// What install would have recorded for the older skill.
+	prior := skillManifest{Installs: []skillInstall{{
+		Agent: "codex", Scope: "project", Path: path, Existed: true, Mode: 0644,
+		Installed: contentHash(stale), AddedBlock: "\n" + stale + "\n",
+	}}}
+	if err := writeManifest(home, prior); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmdSkillSync([]string{path}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := readManifest(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := findInstall(after, path)
+	if index < 0 {
+		t.Fatal("sync dropped the manifest entry")
+	}
+	install := after.Installs[index]
+	current, exists, err := readOptional(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matchesInstalled(current, exists, install) {
+		t.Error("the file no longer matches its manifest entry, so uninstall would refuse it")
+	}
+	if !strings.Contains(install.AddedBlock, section) {
+		t.Error("AddedBlock still holds the old section, so uninstall would remove the wrong text")
+	}
+	if !strings.HasPrefix(install.AddedBlock, "\n") {
+		t.Errorf("the separator install recorded was lost: %q", install.AddedBlock)
+	}
+}

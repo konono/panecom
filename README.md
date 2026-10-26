@@ -201,7 +201,7 @@ $ panecom tell reviewer "レビューをお願いします"
 | `skill install` | agent と scope を選んで skill を適用 |
 | `skill list` | panecom が配布を記録した skill の一覧 |
 | `skill uninstall` | 記録済みの配布先を選んで解除 |
-| `skill sync [--check] <file>...` | 指定ファイルの panecom skill ブロックを再生成（`--check` は書き込まず差分の有無だけ報告） |
+| `skill sync [--check] <file>...` | 指定ファイルの panecom skill ブロックを再生成（マーカーを持つファイルのみ。`--check` は書き込まず差分の有無だけ報告） |
 | `update` | 最新版に自己更新 |
 | `--version` | バージョンを表示 |
 
@@ -516,7 +516,11 @@ panecom skill sync AGENTS.md           # ブロックを再生成
 panecom skill sync --check AGENTS.md   # ずれていれば非ゼロ終了（CI 向け）
 ```
 
-マーカー（`<!-- panecom-skill:start -->` 〜 `<!-- panecom-skill:end -->`）の外側は書き換えません。マーカーが無いファイルには末尾に追記します。
+マーカー（`<!-- panecom-skill:start -->` 〜 `<!-- panecom-skill:end -->`）の外側は書き換えません。
+
+**対象はマーカーを持つファイルだけです。** マーカーの無いファイルはエラーになります（新規追加は `skill install`）。特に Claude 向けの skill ファイルは、ブロックではなく**ファイル全体が skill 本体**という別形式なので対象外です。これを `sync` に渡すと別形式のブロックが追記されてしまうため、明示的に拒否します。埋め込み元の `.claude/skills/panecom.md` 自身も同じ理由で対象外です。
+
+`skill install` で管理されているファイルを `sync` した場合、マニフェストの記録も更新します。記録が古いままだと `skill uninstall` / 再 install が「changed since installation」で拒否されるためです。
 
 このリポジトリでは CI の `skill-sync` ジョブが `--check` を実行し、`.claude/skills/panecom.md` を変更して `AGENTS.md` を再生成し忘れると fail します。
 

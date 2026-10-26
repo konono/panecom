@@ -125,25 +125,44 @@ func replaceSkillSection(existing, section string) (string, string, string, erro
 // how AGENTS.md lost the tell command for two releases (#27).
 //
 // With check it reports drift and writes nothing, which is what CI runs.
+//
+// Only files that already carry the markers are accepted. A Claude skill file
+// holds the skill as its whole content with frontmatter and has no markers, so
+// treating it like the rest would append a second copy in the other format --
+// and doing that to .claude/skills/panecom.md, which is the embedded source,
+// would feed the growth back into the next build.
 func cmdSkillSync(paths []string, check bool) error {
 	section, err := skillSection()
 	if err != nil {
 		return err
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	manifest, err := readManifest(home)
+	if err != nil {
+		return err
+	}
+
 	var drifted []string
+	manifestDirty := false
 	for _, path := range paths {
 		existing, exists, err := readOptional(path)
 		if err != nil {
 			return err
 		}
-		if check && !exists {
+		if !exists {
 			return fmt.Errorf("%s does not exist", path)
+		}
+		if err := requireSkillBlock(path, existing); err != nil {
+			return err
 		}
 		updated, _, _, err := replaceSkillSection(existing, section)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
-		if updated == existing && exists {
+		if updated == existing {
 			continue
 		}
 		if check {
@@ -157,12 +176,56 @@ func cmdSkillSync(paths []string, check bool) error {
 		if err := writeSkillFile(path, updated, mode); err != nil {
 			return err
 		}
+		// The manifest records the block that was installed, and uninstall
+		// refuses a file that no longer matches it. Leaving the record behind
+		// would make this command the thing that breaks install/uninstall.
+		if index := findInstall(manifest, path); index >= 0 {
+			if err := refreshInstalledBlock(&manifest.Installs[index], section); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			manifestDirty = true
+		}
 		fmt.Println(path)
 	}
-	if len(drifted) > 0 {
-		return fmt.Errorf("out of date with the panecom skill: %s\n       run 'panecom skill sync %s' to update",
-			strings.Join(drifted, ", "), strings.Join(drifted, " "))
+	if manifestDirty {
+		if err := writeManifest(home, manifest); err != nil {
+			return fmt.Errorf("saving skill installations: %w", err)
+		}
 	}
+	if len(drifted) > 0 {
+		quoted := make([]string, len(drifted))
+		for i, path := range drifted {
+			quoted[i] = shellQuote(path)
+		}
+		return fmt.Errorf("out of date with the panecom skill: %s\n       run 'panecom skill sync %s' to update",
+			strings.Join(drifted, ", "), strings.Join(quoted, " "))
+	}
+	return nil
+}
+
+// requireSkillBlock rejects a file sync cannot maintain, naming the installer
+// rather than leaving the reader with a refusal and no way forward.
+func requireSkillBlock(path, content string) error {
+	if strings.Contains(content, skillStart) {
+		return nil
+	}
+	if strings.HasPrefix(content, "---\nname: panecom\n") {
+		return fmt.Errorf("%s is a Claude skill file, which is the skill in full rather than a block; sync only maintains files carrying %s (use 'panecom skill install')", path, skillStart)
+	}
+	return fmt.Errorf("%s has no %s block; sync only updates an existing block (use 'panecom skill install' to add one)", path, skillStart)
+}
+
+// refreshInstalledBlock moves a manifest entry onto the section just written,
+// keeping what uninstall needs to restore the file.
+func refreshInstalledBlock(install *skillInstall, section string) error {
+	if install.AddedBlock != "" {
+		marker := strings.Index(install.AddedBlock, skillStart)
+		if marker < 0 {
+			return fmt.Errorf("invalid installed block: missing start marker")
+		}
+		install.AddedBlock = install.AddedBlock[:marker] + section + "\n"
+	}
+	install.Installed = contentHash(section)
 	return nil
 }
 

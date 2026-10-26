@@ -1566,7 +1566,8 @@ Commands:
   skill list                     Show tracked skill installations
   skill uninstall                Remove a tracked skill installation
   skill sync [--check] <file>... Rewrite each file's panecom skill block
-                                 --check reports drift without writing
+                                 Needs an existing block; not for Claude
+                                 skill files   --check: report, don't write
   update                         Update panecom to the latest version
   --version                      Show version
 
