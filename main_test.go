@@ -951,6 +951,67 @@ profiles:
 	}
 }
 
+func TestProjectRootConfigLoadsWithoutStateDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "empty-config"))
+	repo := filepath.Join(home, "project")
+	sub := filepath.Join(repo, "sub")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".panecom.yaml"), []byte("profiles:\n  portable:\n    panes:\n      - role: developer\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, sub, func() {
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := cfg.Profiles["portable"]; !ok {
+			t.Fatal("project root profile was not loaded from a subdirectory")
+		}
+	})
+	if _, err := os.Stat(filepath.Join(repo, ".panecom")); !os.IsNotExist(err) {
+		t.Fatalf("reading a portable profile created a state directory: %v", err)
+	}
+}
+
+func TestRootConfigOverridesLegacyProjectConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "empty-config"))
+	repo := filepath.Join(home, "project")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(repo, ".panecom", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("profiles:\n  old:\n    panes:\n      - role: old\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".panecom.yaml"), []byte("profiles:\n  new:\n    panes:\n      - role: new\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	inDir(t, repo, func() {
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := cfg.Profiles["new"]; !ok {
+			t.Error("root config profile missing")
+		}
+		if _, ok := cfg.Profiles["old"]; ok {
+			t.Error("legacy config was loaded despite root config")
+		}
+	})
+}
+
 func TestParseConfigEmpty(t *testing.T) {
 	cfg, err := parseConfig([]byte("{}"))
 	if err != nil {

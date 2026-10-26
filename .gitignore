@@ -8,7 +8,7 @@ bin/
 .panecom/exec/
 .panecom/exec.lock
 # Links hold machine-specific absolute paths; declare shared ones in
-# config.yaml under profiles.<name>.external_projects instead.
+# .panecom.yaml under profiles.<name>.external_projects instead.
 .panecom/externals/
 
 # IDE

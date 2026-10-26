@@ -209,7 +209,7 @@ panecom --version        # 現在のバージョンを確認
 
 ## プロファイル
 
-`.panecom/config.yaml` にプロファイルを定義し、開発環境を一発で立ち上げます。
+プロジェクトルートの `.panecom.yaml` にプロファイルを定義し、開発環境を一発で立ち上げます。このファイルだけを新しいリポジトリへコピーすればよく、セッション情報が入る `.panecom/` をコピーする必要はありません。
 
 ```yaml
 profiles:
@@ -274,12 +274,13 @@ profiles:
 
 | 優先度 | パス |
 |---|---|
-| 高 | `.panecom/config.yaml` または `.panecom/config.yml`（プロジェクトルートから親を walk-up） |
+| 高 | `<プロジェクトルート>/.panecom.yaml` |
+| 代替 | 従来の `.panecom/config.yaml` または `.panecom/config.yml`（新しいファイルが無い場合のみ） |
 | 低 | `~/.config/panecom/config.yaml` または `config.yml` |
 
 `XDG_CONFIG_HOME` が設定されている場合、グローバル設定は `$XDG_CONFIG_HOME/panecom/` を参照します。
 
-同名プロファイルはプロジェクト側が上書きします（フィールド単位のマージではなくプロファイル全体の置き換え）。
+同名プロファイルはプロジェクト側が上書きします（フィールド単位のマージではなくプロファイル全体の置き換え）。既存の `.panecom/config.yaml` は引き続き読めます。移行する場合は、設定ファイルだけをプロジェクトルートの `.panecom.yaml` へ移動してください。
 
 ## 設計
 
@@ -383,8 +384,8 @@ profiles:
 探索を cwd ではなく anchor から始めるため、サブディレクトリに残った `.panecom/` がプロジェクト本来の状態ディレクトリを隠すことはありません。
 
 ```
+.panecom.yaml            # 共有できるプロファイル設定（プロジェクトルート）
 .panecom/
-├── config.yaml          # プロファイル設定
 ├── externals/           # 別プロジェクトへのリンク（セッションを跨いで永続）
 │   └── <anchor-hash>/
 │       └── <alias>      # 連携先のプロジェクトルート

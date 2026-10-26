@@ -131,7 +131,7 @@ panecom whoami                   # 自分の role・pane ID・登録時の names
 panecom whoami --role            # role のみを表示（スクリプト向け）
 panecom resolve <role>           # role → pane ID を確認
 panecom dump [--full] <role>     # 対象 pane の画面を取得
-panecom profile [-f] <name>     # config.yaml のプロファイルで環境構築
+panecom profile [-f] <name>     # .panecom.yaml のプロファイルで環境構築
 ```
 
 ## ルール
