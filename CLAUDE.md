@@ -23,6 +23,16 @@ v3.0.0 で `exec` コマンドを削除したため、`exec/` と `exec.lock/` �
 
 `.panecom/sessions/` を消すと**全 role の登録が失われる**。消さないこと。stale な登録を整理したい場合は `panecom cleanup` を使う。
 
+## skill の変更
+
+`.claude/skills/panecom.md` を変更したら、`AGENTS.md` を再生成する:
+
+```bash
+go run . skill sync AGENTS.md
+```
+
+`AGENTS.md` は skill のインストール済みコピーで、自動では追従しない。CI の `skill-sync` ジョブが `skill sync --check AGENTS.md` を実行するため、忘れると fail する。
+
 ## ブランチ運用
 
 - main に直接 push しない

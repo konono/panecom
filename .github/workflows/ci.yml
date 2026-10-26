@@ -19,6 +19,17 @@ jobs:
       - run: go vet ./...
       - run: go test -race -coverprofile=coverage.out ./...
 
+  skill-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+      # AGENTS.md is a copy of .claude/skills/panecom.md and nothing
+      # regenerates it on its own, so it has fallen behind before (#27).
+      - run: go run . skill sync --check AGENTS.md
+
   lint:
     runs-on: ubuntu-latest
     steps:
