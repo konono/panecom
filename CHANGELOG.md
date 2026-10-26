@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.1](https://github.com/konono/panecom/compare/v2.0.0...v2.0.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **skill:** match manifest entries across path aliases ([311979d](https://github.com/konono/panecom/commit/311979de450c5e41daab9bd6ca246fc4d9726f10))
+* **skill:** match manifest entries across path aliases ([c716d59](https://github.com/konono/panecom/commit/c716d5940389cce83aef1c9439bb360a66264b17))
+
 ## [2.0.0](https://github.com/konono/panecom/compare/v1.0.0...v2.0.0) (2026-10-26)
 
 
