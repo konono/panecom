@@ -1074,6 +1074,49 @@ func cmdSend(role, message string, verify bool, verifyTimeout float64) {
 	}
 }
 
+// cmdTell carries a message between registered roles. It is send with the
+// sender named: the recipient of a bare send has no way to tell who wrote it,
+// so a reply goes to whoever the reader guesses. send stays a raw way to type
+// into a pane, which is also how panes running a shell are driven, and must
+// not grow a header for their sake.
+func cmdTell(role, message string, verify bool, verifyTimeout float64) {
+	fromRole := ownRole()
+	if fromRole == "" {
+		die("tell needs your own role: run 'panecom register <role>' first, or use 'panecom send' to type into a pane without naming a sender")
+	}
+	paneID := resolveRoleForCommand(role)
+	// The header is its own line so that verifyFragment, which takes the last
+	// non-empty line, still samples the message rather than the header.
+	body := fmt.Sprintf("[panecom:from=%s]\n%s", fromRole, message)
+	code, screen, reason, err := sendAndVerify(role, paneID, body, verify, verifyTimeout)
+	if err != nil {
+		die(fmt.Sprintf("failed to tell '%s': %s", role, err.Error()))
+	}
+	if code != 0 {
+		sendFailure(role, screen, code, reason)
+	}
+}
+
+// ownRole names the role this pane is registered as, or "" when it has none.
+func ownRole() string {
+	paneID, err := mux.CurrentPaneID()
+	if err != nil || paneID == "" {
+		return ""
+	}
+	_, sRoot := requireSession()
+	nsDir, err := namespaceForCurrentPane(sRoot, paneID)
+	if err != nil {
+		return ""
+	}
+	entries, _ := os.ReadDir(filepath.Join(nsDir, "roles"))
+	for _, e := range entries {
+		if content, _ := readFile(filepath.Join(nsDir, "roles", e.Name())); content == paneID {
+			return e.Name()
+		}
+	}
+	return ""
+}
+
 // sendAndVerify sends the message and, when verify is set, watches the
 // recipient's screen to decide whether it was accepted. It returns the exit
 // code to use (0 when delivery looks confirmed or could not be checked), the
@@ -1147,17 +1190,11 @@ func cmdShare(toRole string, full bool, lines int) {
 	fromPaneID := requirePaneID()
 	toPaneID := resolveRoleForCommand(toRole)
 
-	_, sRoot := requireSession()
-	fromRole := "unknown"
-	if nsDir, err := namespaceForCurrentPane(sRoot, fromPaneID); err == nil {
-		entries, _ := os.ReadDir(filepath.Join(nsDir, "roles"))
-		for _, e := range entries {
-			content, _ := readFile(filepath.Join(nsDir, "roles", e.Name()))
-			if content == fromPaneID {
-				fromRole = e.Name()
-				break
-			}
-		}
+	// share names the sender too, but a screen is worth passing on even from
+	// a pane that never registered, so this one falls back instead of failing.
+	fromRole := ownRole()
+	if fromRole == "" {
+		fromRole = "unknown"
 	}
 
 	screen, err := mux.DumpPane(fromPaneID, full)
@@ -1792,8 +1829,11 @@ Commands:
   focus <role>                   Move multiplexer focus to <role>'s pane
   open [-d right|down] <role>    Open new pane and register as <role>
   dump [--full] [-l N] <role>    Dump screen of <role>'s pane
+  tell [--no-verify] [--verify-timeout N] <role> <msg>
+                                 Message <role> as yourself; prefixes
+                                 [panecom:from=<your role>] so they can reply
   send [--no-verify] [--verify-timeout N] <role> <msg>
-                                 Send message to <role>'s pane
+                                 Type a message into <role>'s pane, verbatim
                                  exit 3: unconfirmed (screen unchanged)
                                  exit 4: not submitted (text left in input line)
   share [--full] [-l N] <role>    Share this pane's screen with <role>
@@ -2016,6 +2056,30 @@ func main() {
 			usage()
 		}
 		cmdSend(positional[0], strings.Join(positional[1:], " "), verify, verifyTimeout)
+	case "tell":
+		verify := true
+		verifyTimeout := 3.0
+		positional := []string{}
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == "--no-verify" {
+				verify = false
+			} else if rest[i] == "--verify-timeout" && i+1 < len(rest) {
+				t, err := strconv.ParseFloat(rest[i+1], 64)
+				if err != nil || t <= 0 {
+					die("--verify-timeout requires a positive number")
+				}
+				verifyTimeout = t
+				i++
+			} else {
+				positional = append(positional, rest[i:]...)
+				break
+			}
+		}
+		if len(positional) < 2 {
+			usage()
+		}
+		cmdTell(positional[0], strings.Join(positional[1:], " "), verify, verifyTimeout)
 	case "share":
 		full := false
 		lines := 0

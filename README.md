@@ -115,16 +115,35 @@ namespace: /path/to/app
 ```bash
 # Pane A から
 panecom resolve reviewer                    # → terminal_N (Zellij) / %N (tmux)
-panecom send reviewer "コードをレビューしてください"  # Pane B のエージェントに送られる
+panecom tell reviewer "コードをレビューしてください"  # Pane B のエージェントに送られる
 panecom dump reviewer                       # Pane B の現在画面を取得
 panecom focus reviewer                      # Pane B に移動する
 ```
 
-> **注意**: `send` は対象 pane に文字列 + Enter を注入します。対象が素のシェルの場合、送信内容がコマンドとして実行されます。エージェントの入力として使うか、`exec` コマンドを使ってください。
+> **注意**: `tell` / `send` は対象 pane に文字列 + Enter を注入します。対象が素のシェルの場合、送信内容がコマンドとして実行されます。エージェントの入力として使うか、`exec` コマンドを使ってください。
 
-### send の配信確認
+### tell と send の使い分け
 
-相手が入力を受け付けない状態（詳細表示、ページャ、確認ダイアログなど）だと、送った文字列は黙って捨てられます。`send` は送信前後に対象 pane の画面を取得して配信を確認し、確認できない場合は非ゼロで終了します（デフォルト ON）。
+相手が AI エージェントなら `tell`、pane をそのまま操作したいなら `send` を使います。
+
+| | `tell` | `send` |
+|---|---|---|
+| 相手 | role を持つ AI エージェント | 任意の pane（シェル、TUI 等） |
+| 送る内容 | 1 行目に `[panecom:from=<自分の role>]` が付く | 与えた文字列をそのまま |
+| 自分の登録 | 必須（未登録ならエラー） | 不要 |
+
+```bash
+$ panecom tell reviewer "レビューをお願いします"
+# 相手の pane には次が届く:
+#   [panecom:from=developer]
+#   レビューをお願いします
+```
+
+`send` は汎用のプリミティブなのでヘッダを付けません。シェルや TUI を相手にしたときに混ざると壊れるためです。逆にエージェント宛に `send` を使うと送信者が付かず、相手は返信先を判断できません。
+
+### 配信確認（tell / send 共通）
+
+相手が入力を受け付けない状態（詳細表示、ページャ、確認ダイアログなど）だと、送った文字列は黙って捨てられます。`tell` / `send` は送信前後に対象 pane の画面を取得して配信を確認し、確認できない場合は非ゼロで終了します（デフォルト ON）。
 
 | exit code | 意味 |
 |---|---|
@@ -159,11 +178,12 @@ panecom focus reviewer                      # Pane B に移動する
 | `cleanup [--all] [-n]` | pane が消えた role の登録と、終了したセッションの state を削除（`--all` はリンク先の role も、`-n` は dry run） |
 | `link [-f] <project> <path>` | 別プロジェクトをリンク（引数なしでリンク一覧） |
 | `unlink <project>` | リンクを削除 |
+| `tell [--no-verify] [--verify-timeout N] <role> <msg>` | エージェントにメッセージを送る。1 行目に `[panecom:from=<自分の role>]` が付く（配信確認あり） |
 | `resolve <role>` | role → pane ID を解決 |
 | `focus <role>` | 対象 pane にフォーカスを移動 |
 | `open [-d right\|down] <role>` | 新しい pane を開いて role を登録 |
 | `dump [--full] <role>` | 対象 pane の画面を取得 |
-| `send [--no-verify] [--verify-timeout N] <role> <msg>` | 対象 pane にメッセージを送信（配信確認あり） |
+| `send [--no-verify] [--verify-timeout N] <role> <msg>` | 対象 pane に文字列をそのまま打ち込む（配信確認あり） |
 | `share [--full] <role>` | 自分の画面を相手に共有 |
 | `exec [--timeout N] <role> <cmd>` | 対象 pane でコマンドを実行し結果を返す |
 | `profile [-f] <name>` | プロファイルから環境を構築 |

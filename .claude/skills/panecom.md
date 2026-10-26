@@ -26,8 +26,9 @@ description: ユーザーから developer / reviewer 等の役割を割り当て
 
 同じプロジェクトで `developer` と `reviewer` が協業するときは、次を基本にする:
 
-- reviewer は developer と方針を相談し、実装の依頼を `panecom send developer` で送る。developer が判断に迷ったら `panecom send reviewer` で相談する。
-- developer は実装後、commit 前に reviewer にレビューを依頼する。reviewer は差分だけでなくテストと実際の動作も確認し、**レビュー結果を `panecom send developer` で返す**。自分の pane に書いて終わりにしない（下記「依頼と応答」）。
+- エージェント同士のやり取りはすべて `panecom tell` を使う（`send` ではない。下記「tell と send の使い分け」）。
+- reviewer は developer と方針を相談し、実装の依頼を `panecom tell developer` で送る。developer が判断に迷ったら `panecom tell reviewer` で相談する。
+- developer は実装後、commit 前に reviewer にレビューを依頼する。reviewer は差分だけでなくテストと実際の動作も確認し、**レビュー結果を `panecom tell developer` で返す**。自分の pane に書いて終わりにしない（下記「依頼と応答」）。
 - reviewer はレビュー結果を踏まえて commit、push、PR の指示を出し、developer が実行する。ユーザーや上位の指示に確認・承認条件があればそれを守る。
 - reviewer は作業中、おおむね 1 時間ごとに `panecom dump developer` で進捗を確認する。止まっていると判断したら、状況に応じて質問や次の作業を送る。この案内は AI が停止中に自動起動するものではない。
 
@@ -37,15 +38,23 @@ description: ユーザーから developer / reviewer 等の役割を割り当て
 
 **panecom 経由で受けた依頼は、panecom 経由で返す。** 相手は別の pane にいて、こちらの画面を見ていない。自分の pane に結果を書いただけでは、相手は待ち続ける。
 
-- **受けた側**: 作業が終わったら、または結論・判断が出たら `panecom send <依頼元 role> "<結果>"` を送る。**送信するまでそのタスクは完了していない**
+- **受けた側**: 作業が終わったら、または結論・判断が出たら `panecom tell <依頼元 role> "<結果>"` を送る。**送信するまでそのタスクは完了していない**
+- **返信先の調べ方**: `tell` で届いたメッセージは 1 行目が `[panecom:from=<role>]` になっている。そこに書かれた role に返す
 - **返す内容**: 結論（approve / changes requested など）、その理由、相手が次に取るべき行動。長くなる場合は要点だけを送り、詳細は PR コメントやファイルに置いてその場所を伝える
-- **送る側**: 依頼するときは自分の role を名乗り、返信先を明示する。`send` は送信者を自動で付けないため、名乗らないと相手は返信先を判断できない
+- **送る側**: `tell` が自分の role を自動で付けるので、本文で名乗る必要はない。`send` で送ると送信者が付かず、相手は返信先を判断できない
 
   ```
-  panecom send reviewer "developer です。PR #20 のレビューをお願いします: <URL>。結果は panecom send developer で返してください。"
+  panecom tell reviewer "PR #20 のレビューをお願いします: <URL>"
   ```
 
-- **依頼の入口は問わない**: 相手 role と進めている共同作業については、ユーザーから pane 内で直接指示された場合でも、その作業の結果を相手 role に `panecom send` で返す。相手はこちらの画面を見ていないという点は、依頼がどこから来たかで変わらない。**対象はその共同作業の結果に限る**。同じ pane でユーザーから頼まれただけの、共同作業と無関係な作業まで送らない
+  相手の pane に届く内容:
+
+  ```
+  [panecom:from=developer]
+  PR #20 のレビューをお願いします: <URL>
+  ```
+
+- **依頼の入口は問わない**: 相手 role と進めている共同作業については、ユーザーから pane 内で直接指示された場合でも、その作業の結果を相手 role に `panecom tell` で返す。相手はこちらの画面を見ていないという点は、依頼がどこから来たかで変わらない。**対象はその共同作業の結果に限る**。同じ pane でユーザーから頼まれただけの、共同作業と無関係な作業まで送らない
 - **返せないときも黙らない**: 判断できない・情報が足りない場合は、「何が足りないか」を送り返す
 - **時間がかかるとき**: 着手した旨を 1 通送ってから作業に入る。相手が待ちか再依頼かを判断できる
 
@@ -73,16 +82,39 @@ PANECOM_MUX=tmux panecom <command> # 環境変数
 
 | やりたいこと | コマンド |
 |---|---|
-| 他の AI エージェントにメッセージを送る | `panecom send <role> "<message>"` |
+| 他の AI エージェントにメッセージを送る | `panecom tell <role> "<message>"` |
+| pane に文字列をそのまま打ち込む（相手が AI とは限らない） | `panecom send <role> "<text>"` |
 | 他の AI エージェントの画面を見る | `panecom dump <role>` |
 | 共有ターミナルを開く | `panecom open terminal` |
 | 共有ターミナルでコマンドを実行する | `panecom exec terminal "<command>"` |
 | 自分の画面を相手に見せる（人が使う） | `panecom share <role>` |
 
-## send の配信確認（重要）
+## tell と send の使い分け（重要）
 
-`send` は相手の画面に文字を打ち込んで Enter を送るだけなので、相手が**入力モードでない**と黙って捨てられる。
-そのため panecom は送信後に相手の画面を自動で確認し（デフォルト ON）、確認できなければ非ゼロで終了する。
+**相手が AI エージェントなら `tell`、pane をそのまま操作したいなら `send`。** 迷ったら `tell` を使う。
+
+| | `tell` | `send` |
+|---|---|---|
+| 相手 | role を持つ AI エージェント（人を含む） | 任意の pane（シェル、TUI、エディタ等） |
+| 送る内容 | 1 行目に `[panecom:from=<自分の role>]` が付く | **与えた文字列をそのまま**打ち込む |
+| 自分の登録 | **必須**（未登録ならエラー） | 不要 |
+| 用途 | 依頼・相談・報告・レビュー結果 | コマンド入力、キー送信、プロンプトへの応答 |
+
+```
+panecom tell reviewer "PR #20 のレビューをお願いします"   # エージェント宛
+panecom send terminal "git status"                        # pane にそのまま打ち込む
+```
+
+`send` は汎用のプリミティブで、ヘッダを付けない。シェルや TUI を相手にしたときに `[panecom:from=...]` が混ざると壊れるため。エージェント宛に `send` を使うと送信者が付かず、相手は返信先を判断できない（それが `tell` を分けた理由）。
+
+`tell` は未登録の pane から実行するとエラーになる。名乗るのが目的のコマンドなので、先に `panecom register <role>` する。名乗らずに文字列を送りたいだけなら `send` を使う。
+
+なお**シェル pane でコマンドを実行して結果を受け取りたい場合は `exec`** を使う（`send` では結果が返らない）。
+
+## 配信確認（tell / send 共通、重要）
+
+`tell` / `send` はどちらも相手の画面に文字を打ち込んで Enter を送るだけなので、相手が**入力モードでない**と黙って捨てられる。
+そのため panecom は送信後に相手の画面を自動で確認し（デフォルト ON）、確認できなければ非ゼロで終了する。以下は両コマンドに共通する。
 
 | exit code | 意味 | AI がとるべき対応 |
 |---|---|---|
@@ -112,8 +144,9 @@ stderr の画面内容から相手の状態を推定する。典型例:
 意図的に確認をスキップしたいときだけ使う:
 
 ```
-panecom send --no-verify <role> "<message>"
-panecom send --verify-timeout 10 <role> "<message>"   # 相手の描画が遅い場合
+panecom tell --no-verify <role> "<message>"
+panecom tell --verify-timeout 10 <role> "<message>"   # 相手の描画が遅い場合
+panecom send --no-verify <role> "<text>"              # send も同じフラグを持つ
 ```
 
 ## 共有ターミナル (exec) の使い方
@@ -150,14 +183,14 @@ panecom exec terminal "cat /etc/os-release"
 panecom exec --timeout 120 terminal "make build"
 ```
 
-### exec と send の違い
+### exec / tell / send の違い
 
-| | exec | send |
-|---|---|---|
-| 対象 | シェルが動いている pane | AI エージェントの pane |
-| 動作 | コマンド実行 → 結果を返す | メッセージ送信（Enter 付き） |
-| 待機 | 完了まで待つ | 配信確認のみ待つ（数秒） |
-| 結果 | stdout に出力される | なし（exit code で配信可否を判定） |
+| | exec | tell | send |
+|---|---|---|---|
+| 対象 | シェルが動いている pane | AI エージェントの pane | 任意の pane |
+| 動作 | コマンド実行 → 結果を返す | 送信者名を付けてメッセージ送信 | 文字列をそのまま打ち込む |
+| 待機 | 完了まで待つ | 配信確認のみ待つ（数秒） | 配信確認のみ待つ（数秒） |
+| 結果 | stdout に出力される | なし（exit code で配信可否を判定） | なし（exit code で配信可否を判定） |
 
 ## その他のコマンド
 
@@ -166,6 +199,8 @@ panecom register <role>          # 自分の pane を role として登録
 panecom register                 # 同じタブの pane を選んで登録（role 入力では Tab 補完）
 panecom whoami                   # 自分の role・pane ID・登録時の namespace を確認
 panecom whoami --role            # role のみを表示（スクリプト向け）
+panecom tell <role> "<message>"  # エージェントにメッセージ（送信者名が付く）
+panecom send <role> "<text>"     # pane に文字列をそのまま打ち込む
 panecom resolve <role>           # role → pane ID を確認
 panecom dump [--full] <role>     # 対象 pane の画面を取得
 panecom profile [-f] <name>     # .panecom.yaml のプロファイルで環境構築
@@ -183,8 +218,8 @@ panecom skill uninstall         # 記録した配布先を選んで解除
 - pane ID を推測しない
 - マルチプレクサの list-panes コマンドから通信相手を推測しない
 - exec の結果は stdout で返るので、別途 dump する必要はない
-- send は AI エージェントへ、exec はシェル pane へ使う
+- **エージェント宛は `tell`、pane をそのまま操作するなら `send`、シェルでコマンドを実行して結果が欲しいなら `exec`**。エージェント宛に `send` を使わない（送信者が付かず相手が返信先を判断できない）
 - **panecom で受けた依頼は panecom で返す**。自分の pane に結果を出力して終わりにしない。返信を送るまでそのタスクは完了していない
-- **依頼を送るときは自分の role を名乗り、返信先を伝える**。`send` は送信者を自動では付けない
-- **send が非ゼロで終了したら成功扱いにしない**。stderr の画面を読んで原因を判断し、必要ならユーザーに報告する
+- **返信先は届いたメッセージの `[panecom:from=<role>]` を見る**。`tell` が自動で付けるので、本文で名乗る必要はない
+- **tell / send が非ゼロで終了したら成功扱いにしない**。stderr の画面を読んで原因を判断し、必要ならユーザーに報告する
 - 相手の UI 状態を復帰させるキー（Ctrl+O、Esc、q など）を勝手に送らない

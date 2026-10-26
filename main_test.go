@@ -841,6 +841,64 @@ func TestCleanupRemovesDeadSessionDirectories(t *testing.T) {
 	})
 }
 
+func TestTellNamesTheSender(t *testing.T) {
+	a, _, f := twoProjects(t)
+	f.screens = []string{"> ", "done\n"}
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		cmdTell("other/rev", "please review", false, 0)
+
+		if len(f.sentText) != 1 {
+			t.Fatalf("sent %d messages, want 1", len(f.sentText))
+		}
+		got := f.sentText[0]
+		// The header is its own line: verifyFragment samples the last
+		// non-empty line, which must stay the message.
+		want := "[panecom:from=d]\nplease review"
+		if got != want {
+			t.Errorf("sent %q, want %q", got, want)
+		}
+		if verifyFragment(got) == "[panecom:from=d]" {
+			t.Error("delivery verification must sample the message, not the header")
+		}
+	})
+}
+
+func TestTellRefusesWhenTheSenderHasNoRole(t *testing.T) {
+	a, _, f := twoProjects(t)
+	// A pane that never registered has no name to put in the header, and an
+	// anonymous message defeats the point of the command.
+	f.pane = "p_unregistered"
+
+	inDir(t, a, func() {
+		if got := ownRole(); got != "" {
+			t.Fatalf("ownRole = %q, want empty for an unregistered pane", got)
+		}
+		if len(f.sentText) != 0 {
+			t.Error("nothing should have been sent")
+		}
+	})
+}
+
+func TestSendStaysVerbatim(t *testing.T) {
+	a, _, f := twoProjects(t)
+
+	inDir(t, a, func() {
+		if _, _, err := linkProject("other", "../b", false); err != nil {
+			t.Fatal(err)
+		}
+		// send also drives panes running a shell, so it must type exactly
+		// what it was given.
+		cmdSend("other/rev", "echo hello", false, 0)
+		if len(f.sentText) != 1 || f.sentText[0] != "echo hello" {
+			t.Errorf("send altered the message: %q", f.sentText)
+		}
+	})
+}
+
 func TestFocusTargetsTheRolesPane(t *testing.T) {
 	a, b, f := twoProjects(t)
 
