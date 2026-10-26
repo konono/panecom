@@ -119,6 +119,53 @@ func replaceSkillSection(existing, section string) (string, string, string, erro
 	return existing + block, "", block, nil
 }
 
+// cmdSkillSync rewrites the managed block of each file from the embedded
+// skill. Installing is interactive, so without this the only way to follow a
+// skill change in a tracked file is to remember to do it by hand -- which is
+// how AGENTS.md lost the tell command for two releases (#27).
+//
+// With check it reports drift and writes nothing, which is what CI runs.
+func cmdSkillSync(paths []string, check bool) error {
+	section, err := skillSection()
+	if err != nil {
+		return err
+	}
+	var drifted []string
+	for _, path := range paths {
+		existing, exists, err := readOptional(path)
+		if err != nil {
+			return err
+		}
+		if check && !exists {
+			return fmt.Errorf("%s does not exist", path)
+		}
+		updated, _, _, err := replaceSkillSection(existing, section)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		if updated == existing && exists {
+			continue
+		}
+		if check {
+			drifted = append(drifted, path)
+			continue
+		}
+		mode, err := skillFileMode(path, exists)
+		if err != nil {
+			return err
+		}
+		if err := writeSkillFile(path, updated, mode); err != nil {
+			return err
+		}
+		fmt.Println(path)
+	}
+	if len(drifted) > 0 {
+		return fmt.Errorf("out of date with the panecom skill: %s\n       run 'panecom skill sync %s' to update",
+			strings.Join(drifted, ", "), strings.Join(drifted, " "))
+	}
+	return nil
+}
+
 func manifestPath(home string) string {
 	return filepath.Join(home, ".config", "panecom", "skill-installs.json")
 }

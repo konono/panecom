@@ -1565,6 +1565,8 @@ Commands:
   skill install                  Choose agent and user/project scope
   skill list                     Show tracked skill installations
   skill uninstall                Remove a tracked skill installation
+  skill sync [--check] <file>... Rewrite each file's panecom skill block
+                                 --check reports drift without writing
   update                         Update panecom to the latest version
   --version                      Show version
 
@@ -1599,7 +1601,8 @@ func main() {
 		}
 		return
 	case "skill":
-		if len(args) != 2 {
+		// sync takes file arguments; the others take none.
+		if len(args) < 2 || (args[1] != "sync" && len(args) != 2) {
 			usage()
 		}
 		var err error
@@ -1610,6 +1613,20 @@ func main() {
 			err = cmdSkillList()
 		case "uninstall":
 			err = cmdSkillUninstall()
+		case "sync":
+			check := false
+			paths := []string{}
+			for _, a := range args[2:] {
+				if a == "--check" {
+					check = true
+				} else {
+					paths = append(paths, a)
+				}
+			}
+			if len(paths) == 0 {
+				usage()
+			}
+			err = cmdSkillSync(paths, check)
 		default:
 			usage()
 		}

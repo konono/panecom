@@ -513,3 +513,83 @@ func TestUntrackedSkillsShowsScriptDeployments(t *testing.T) {
 		t.Fatalf("untracked after tracking=%+v err=%v", found, err)
 	}
 }
+
+// AGENTS.md is a copy of the skill that nothing regenerated automatically, so
+// it silently fell behind when tell was added (#27). This is the check that
+// would have caught it.
+func TestSkillSyncDetectsAndRepairsDrift(t *testing.T) {
+	section, err := skillSection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "AGENTS.md")
+	inSync := section + "\n"
+	if err := os.WriteFile(path, []byte(inSync), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmdSkillSync([]string{path}, true); err != nil {
+		t.Fatalf("a file matching the skill reported drift: %v", err)
+	}
+
+	drifted := strings.Replace(inSync, "# panecom", "# panecom (stale copy)", 1)
+	if drifted == inSync {
+		t.Fatal("the test did not actually change the file")
+	}
+	if err := os.WriteFile(path, []byte(drifted), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = cmdSkillSync([]string{path}, true)
+	if err == nil {
+		t.Fatal("drift was not reported")
+	}
+	// The message has to say how to fix it: the only other way is the
+	// interactive installer.
+	if !strings.Contains(err.Error(), "skill sync "+path) {
+		t.Errorf("error does not name the repair command: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != drifted {
+		t.Error("--check wrote to the file")
+	}
+
+	if err := cmdSkillSync([]string{path}, false); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != inSync {
+		t.Errorf("sync did not restore the block:\n%s", got)
+	}
+	if err := cmdSkillSync([]string{path}, true); err != nil {
+		t.Errorf("still drifted after sync: %v", err)
+	}
+}
+
+func TestSkillSyncKeepsContentAroundTheBlock(t *testing.T) {
+	section, err := skillSection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "AGENTS.md")
+	// A host file may carry its own notes; only the managed block is ours.
+	before, after := "# House rules\n\nkeep me\n\n", "\n\n## Also mine\n"
+	stale := strings.Replace(section, "# panecom", "# panecom (stale)", 1)
+	if err := os.WriteFile(path, []byte(before+stale+after), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmdSkillSync([]string{path}, false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != before+section+after {
+		t.Errorf("content outside the block was not preserved:\n%s", got)
+	}
+}
+
+func TestSkillSyncCheckRefusesAMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.md")
+	// Silently passing here would let a renamed or deleted file hide drift.
+	if err := cmdSkillSync([]string{path}, true); err == nil {
+		t.Fatal("a missing file passed the check")
+	}
+}

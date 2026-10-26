@@ -201,6 +201,7 @@ $ panecom tell reviewer "レビューをお願いします"
 | `skill install` | agent と scope を選んで skill を適用 |
 | `skill list` | panecom が配布を記録した skill の一覧 |
 | `skill uninstall` | 記録済みの配布先を選んで解除 |
+| `skill sync [--check] <file>...` | 指定ファイルの panecom skill ブロックを再生成（`--check` は書き込まず差分の有無だけ報告） |
 | `update` | 最新版に自己更新 |
 | `--version` | バージョンを表示 |
 
@@ -505,6 +506,19 @@ panecom skill install
 # [x] Codex  / Project (current repository)
 # > [ Install selected (2) ]
 ```
+
+### skill を変更したとき
+
+`skill install` は対話 UI なので、リポジトリに配布済みのファイル（このリポジトリの `AGENTS.md` 等）を機械的に追従させる用途には使えません。`skill sync` を使います。
+
+```bash
+panecom skill sync AGENTS.md           # ブロックを再生成
+panecom skill sync --check AGENTS.md   # ずれていれば非ゼロ終了（CI 向け）
+```
+
+マーカー（`<!-- panecom-skill:start -->` 〜 `<!-- panecom-skill:end -->`）の外側は書き換えません。マーカーが無いファイルには末尾に追記します。
+
+このリポジトリでは CI の `skill-sync` ジョブが `--check` を実行し、`.claude/skills/panecom.md` を変更して `AGENTS.md` を再生成し忘れると fail します。
 
 選択した配布先は `~/.config/panecom/skill-installs.json` に記録されます。次のコマンドで確認・解除できます。`list` は従来のスクリプトなどで入れた配布先も、現在の user/project で見つかる範囲は `untracked` と表示します。同じ内容の既存配布を選んで install すると管理対象として引き継ぎ、uninstall 時は元からあったファイルを残します。独自に編集された既存ファイルは install 前の内容と権限を保存して復元します。Claude の既存ファイルは install 時に全文を置き換えるため、選択画面にその旨を表示します。配布先が symlink の場合は通常ファイルに置き換わり、uninstall でも symlink は復元されません。配布先がすでに削除されている場合は追跡記録だけを解除します。uninstall は後から skill 本体が編集されていた場合、保護のため中止します。
 
