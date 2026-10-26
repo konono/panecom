@@ -12,8 +12,23 @@
 - 「一緒にターミナルで作業しよう」
 - 「panecom で〜して」
 - 「reviewer に送って」「developer に共有して」
+- 「あなたがレビュワーね」「developer として進めて」など、自分への役割指定
+- 「別プロジェクトの reviewer と相談して」など、panecom の相手を使う共同作業の指示
 
 **通常のコマンド実行は自分の環境（Bash ツール等）で行う。** panecom 経由だとサンドボックスや権限管理の外で動作する。
+
+## developer / reviewer として参加する
+
+ユーザーが自分を「レビュワー」「reviewer」と指定したら、自分の pane で `panecom register reviewer` を実行する。「開発者」「developer」なら `panecom register developer` を実行する。成功したら `panecom whoami` で role と namespace を確認する。失敗した場合は理由をユーザーに伝え、登録済みとは扱わない。ユーザーが pane を選んで登録する操作は `panecom register`（引数なし）で行う。
+
+同じプロジェクトで `developer` と `reviewer` が協業するときは、次を基本にする:
+
+- reviewer は developer と方針を相談し、実装の依頼を `panecom send developer` で送る。developer が判断に迷ったら `panecom send reviewer` で相談する。
+- developer は実装後、commit 前に reviewer にレビューを依頼する。reviewer は差分だけでなくテストと実際の動作も確認し、指摘を返す。
+- reviewer はレビュー結果を踏まえて commit、push、PR の指示を出し、developer が実行する。ユーザーや上位の指示に確認・承認条件があればそれを守る。
+- reviewer は作業中、おおむね 1 時間ごとに `panecom dump developer` で進捗を確認する。止まっていると判断したら、状況に応じて質問や次の作業を送る。この案内は AI が停止中に自動起動するものではない。
+
+相手が別プロジェクトにいる共同作業を依頼された場合、指定されたリポジトリのパスと alias から `panecom link <alias> <path>` を自分で設定し、`<alias>/<role>` で通信する。相手がまだ未登録で、後から参加することが分かっている場合だけ `panecom link -f` を使う。終了時に一時的なリンクを解除するなら、自分がその作業のために作ったものだけ `panecom unlink <alias>` で解除する。既存リンクや profile が管理するリンクは勝手に解除しない。対象のプロジェクトを特定できないときはパスを確認する。
 
 ## マルチプレクサの選択
 
@@ -127,16 +142,22 @@ panecom exec --timeout 120 terminal "make build"
 
 ```
 panecom register <role>          # 自分の pane を role として登録
+panecom register                 # 同じタブの pane を選んで登録（role 入力では Tab 補完）
 panecom whoami                   # 自分の role・pane ID・登録時の namespace を確認
 panecom whoami --role            # role のみを表示（スクリプト向け）
 panecom resolve <role>           # role → pane ID を確認
 panecom dump [--full] <role>     # 対象 pane の画面を取得
 panecom profile [-f] <name>     # .panecom.yaml のプロファイルで環境構築
+panecom link [-f] <alias> <path> # 別プロジェクトの role を参照可能にする
+panecom unlink <alias>          # リンクを削除
+panecom skill install           # agent と user/project scope を選んで skill を適用
+panecom skill list              # panecom が記録した配布先を表示
+panecom skill uninstall         # 記録した配布先を選んで解除
 ```
 
 ## ルール
 
-- **ユーザーの明示的な指示なく panecom を使わない**
+- **ユーザーの明示的な指示なく panecom を使わない**。自分への role 指定と別プロジェクトの相手との協業依頼も明示的な指示に含む
 - **通常のコマンド実行は自分の環境で行う（Bash ツール等）**
 - pane ID を推測しない
 - マルチプレクサの list-panes コマンドから通信相手を推測しない

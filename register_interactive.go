@@ -79,9 +79,12 @@ func cmdRegisterInteractive() {
 		}
 		pane.Cwd = path
 	}
-	role, err := promptLine(tty, reader, "Role name: ")
+	role, ok, err := promptRoleTTY(tty, reader)
 	if err != nil {
 		die("cannot read role name: " + err.Error())
+	}
+	if !ok {
+		return
 	}
 	if !rolePattern.MatchString(role) {
 		die(fmt.Sprintf("invalid role name '%s' (must match [A-Za-z0-9][A-Za-z0-9._-]*)", role))
@@ -120,6 +123,77 @@ func promptLine(out io.Writer, reader *bufio.Reader, label string) (string, erro
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
+}
+
+var suggestedRoles = []string{"developer", "reviewer"}
+
+func promptRoleTTY(tty *os.File, reader *bufio.Reader) (string, bool, error) {
+	oldState, err := term.MakeRaw(int(tty.Fd()))
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = term.Restore(int(tty.Fd()), oldState) }()
+	return promptRole(reader, tty)
+}
+
+// promptRole accepts arbitrary role names and completes the common roles with Tab.
+// It runs with terminal echo disabled so the prompt can be redrawn after completion.
+func promptRole(in io.Reader, out io.Writer) (string, bool, error) {
+	const label = "Role name (Tab: developer/reviewer): "
+	var value string
+	var prefix string
+	match := -1
+	redraw := func() error {
+		_, err := fmt.Fprintf(out, "\r\x1b[2K%s%s", label, value)
+		return err
+	}
+	if err := redraw(); err != nil {
+		return "", false, err
+	}
+	var b [1]byte
+	for {
+		if _, err := io.ReadFull(in, b[:]); err != nil {
+			return "", false, err
+		}
+		switch b[0] {
+		case '\r', '\n':
+			if _, err := fmt.Fprint(out, "\r\n"); err != nil {
+				return "", false, err
+			}
+			return value, true, nil
+		case 27, 3:
+			_, _ = fmt.Fprint(out, "\r\n")
+			return "", false, nil
+		case '\t':
+			if match < 0 {
+				prefix = value
+			}
+			for i := 1; i <= len(suggestedRoles); i++ {
+				candidate := (match + i) % len(suggestedRoles)
+				if strings.HasPrefix(suggestedRoles[candidate], prefix) {
+					value = suggestedRoles[candidate]
+					match = candidate
+					break
+				}
+			}
+		case 127, 8:
+			if len(value) > 0 {
+				value = value[:len(value)-1]
+			}
+			match = -1
+		case 21: // Ctrl+U clears the input.
+			value = ""
+			match = -1
+		default:
+			if b[0] >= 32 && b[0] < 127 {
+				value += string(b[0])
+				match = -1
+			}
+		}
+		if err := redraw(); err != nil {
+			return "", false, err
+		}
+	}
 }
 
 func pickPaneTTY(tty *os.File, panes []Pane, currentID string) (Pane, bool, error) {

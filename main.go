@@ -1578,6 +1578,9 @@ Commands:
   share [--full] [-l N] <role>    Share this pane's screen with <role>
   exec [--timeout N] <role> <cmd> Run command on <role>, return output
   profile [-f] <name>            Launch profile from .panecom.yaml
+  skill install                  Choose agent and user/project scope
+  skill list                     Show tracked skill installations
+  skill uninstall                Remove a tracked skill installation
   update                         Update panecom to the latest version
   --version                      Show version
 
@@ -1608,6 +1611,25 @@ func main() {
 		return
 	case "update":
 		if err := update.Run(Version); err != nil {
+			die(err.Error())
+		}
+		return
+	case "skill":
+		if len(args) != 2 {
+			usage()
+		}
+		var err error
+		switch args[1] {
+		case "install":
+			err = cmdSkillInstall()
+		case "list":
+			err = cmdSkillList()
+		case "uninstall":
+			err = cmdSkillUninstall()
+		default:
+			usage()
+		}
+		if err != nil {
 			die(err.Error())
 		}
 		return

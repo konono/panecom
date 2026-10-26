@@ -77,7 +77,7 @@ panecom register reviewer
 codex  # または claude 等
 ```
 
-Pane B に移動せずに登録する場合は、Pane A で `panecom register` を実行します。現在のタブ／ウィンドウ内で、矢印キー（または `h`/`j`/`k`/`l`）を使って画面上の上下左右にある pane を選び、Enter、続いて role 名を入力してください。端に着いても選択は飛びません。選んだ pane は Zellij では一時的に色付き、tmux では mark 表示され、画面のプレビューも表示されます。選んだ pane の作業ディレクトリからプロジェクトを判定します。作業ディレクトリを取得できない場合は、プロジェクトのパスも入力します。`Esc` または `q` で選択を中止できます。対象 pane にコマンドは送られませんが、対象プロジェクトの `.panecom/` に登録状態を書き込み（存在しなければ作成）、pane のタイトルを `panecom:<role>` に変更します。別プロジェクトの pane を選ぶと、そのプロジェクトに登録され、呼び出し元からは `panecom link` 後に `<project>/<role>` で参照できます。
+Pane B に移動せずに登録する場合は、Pane A で `panecom register` を実行します。現在のタブ／ウィンドウ内で、矢印キー（または `h`/`j`/`k`/`l`）を使って画面上の上下左右にある pane を選び、Enter、続いて role 名を入力してください。role 入力中は `Tab` で `developer` / `reviewer` を補完できます。例えば `rev`→`Tab` で `reviewer` になり、空欄からの `Tab` は候補を順に表示します。任意の role 名も入力できます。端に着いても選択は飛びません。選んだ pane は Zellij では一時的に色付き、tmux では mark 表示され、画面のプレビューも表示されます。選んだ pane の作業ディレクトリからプロジェクトを判定します。作業ディレクトリを取得できない場合は、プロジェクトのパスも入力します。`Esc` または `q` で pane 選択を、role 入力中は `Esc` で登録を中止できます。対象 pane にコマンドは送られませんが、対象プロジェクトの `.panecom/` に登録状態を書き込み（存在しなければ作成）、pane のタイトルを `panecom:<role>` に変更します。別プロジェクトの pane を選ぶと、そのプロジェクトに登録され、呼び出し元からは `panecom link` 後に `<project>/<role>` で参照できます。
 
 Zellij の色は選択画面を閉じると標準色に戻ります。選択前に `set-pane-color` で個別に設定した色は復元されません。
 
@@ -91,13 +91,15 @@ Tab/window: app  (0)
 
 Preview:
 ...
-Role name: m
-m -> codex (/path/to/app)
+Role name (Tab: developer/reviewer): rev<Tab>
+reviewer -> codex (/path/to/app)
 ```
 
 > 両方の pane は **同じセッション内**、**同じプロジェクト** から register してください。これが同じ namespace に所属する条件です。プロジェクトは register 時の作業ディレクトリから遡って判定されるので、リポジトリ内のどのディレクトリで register しても構いません。
 
 登録内容は `panecom whoami` で確認できます。同じプロジェクト内で作業ディレクトリを移動しても、登録時に保存された namespace を表示します。別プロジェクトへ移動し、state store も変わった場合は登録が見つからずエラーになります。従来の role だけの出力をスクリプトで使う場合は `panecom whoami --role` に変更してください。
+
+AI エージェントに「あなたがレビュワーね」「developer として進めて」のように役割を指定した場合は、配布された panecom skill に従い、エージェント自身が `panecom register reviewer` / `panecom register developer` を実行して登録を確認します。developer は実装後、commit 前に reviewer へレビューを依頼し、reviewer はテストと動作確認を含めて確認します。作業中の reviewer はおおむね 1 時間ごとに developer の画面を確認します（AI が停止中に起動するタイマーではありません）。別プロジェクトの相手との協業を依頼した場合も、パスが分かればエージェント自身が必要な `link` を設定できます。
 
 ```text
 $ panecom whoami
@@ -162,6 +164,9 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | `share [--full] <role>` | 自分の画面を相手に共有 |
 | `exec [--timeout N] <role> <cmd>` | 対象 pane でコマンドを実行し結果を返す |
 | `profile [-f] <name>` | プロファイルから環境を構築 |
+| `skill install` | agent と scope を選んで skill を適用 |
+| `skill list` | panecom が配布を記録した skill の一覧 |
+| `skill uninstall` | 記録済みの配布先を選んで解除 |
 | `update` | 最新版に自己更新 |
 | `--version` | バージョンを表示 |
 
@@ -429,20 +434,40 @@ panecom は対象 pane に対して **直接的な文字列注入と任意コマ
 
 ## AI エージェント向け Skill
 
-`scripts/deploy-skill.sh` で Claude Code と Codex の両方に panecom の Skill を配布できます。
+インストール済みの panecom から Skill を配布できます。`panecom skill install` は `~/.claude` と `~/.codex` のディレクトリの有無を表示し、Claude / Codex と user（全プロジェクト）/ project（現在のプロジェクト）の組み合わせをチェック式の画面で選べます。上下矢印（または `j`/`k`）で移動、Space でチェックし、最後の `Install selected` に移動して Enter で適用します。`Tab` で適用ボタンへ移動、`Esc` または `q` で中止できます。両 agent に別々の scope を指定することも、同じ agent を user と project の両方に入れることもできます。ディレクトリの有無は agent 本体のインストール確認ではありません。マルチプレクサ外でも実行できますが、対話用の端末が必要です。
+
+```bash
+panecom skill install
+# [x] Claude / User (all projects)
+# [ ] Claude / Project (current repository)
+# [ ] Codex  / User (all projects)
+# [x] Codex  / Project (current repository)
+# > [ Install selected (2) ]
+```
+
+選択した配布先は `~/.config/panecom/skill-installs.json` に記録されます。次のコマンドで確認・解除できます。`list` は従来のスクリプトなどで入れた配布先も、現在の user/project で見つかる範囲は `untracked` と表示します。同じ内容の既存配布を選んで install すると管理対象として引き継ぎ、uninstall で外せます。独自に編集された既存ファイルは install 前の内容を保存して復元します。uninstall は後から skill 本体が編集されていた場合、保護のため中止します。
+
+```bash
+panecom skill list
+panecom skill uninstall
+```
+
+install は実行中の panecom バイナリに同梱された skill を使います。最新版にしたいときは、先に `panecom update` または `go install .` でバイナリを更新し、`panecom skill install` を再実行してください。エージェントが新しい指示を読むには、新しいセッションを開始してください。
+
+リポジトリの `AGENTS.md` も再生成するときは、従来どおりソースツリーで `scripts/deploy-skill.sh` を実行します。
 
 ```bash
 ./scripts/deploy-skill.sh
 ```
 
-このスクリプトは以下のファイルを作成・更新します:
+配布先は次のとおりです:
 
-| 対象 | パス |
-|---|---|
-| Claude Code (グローバル) | `~/.claude/skills/panecom.md` |
-| Claude Code (プロジェクト) | `.claude/skills/panecom.md` |
-| Codex (プロジェクト) | `AGENTS.md` |
-| Codex (グローバル) | `~/.codex/instructions.md` |
+| 対象 | パス | 更新方法 |
+|---|---|---|
+| Claude Code (user) | `~/.claude/skills/panecom.md` | `skill install` / スクリプト |
+| Claude Code (project) | `<project>/.claude/skills/panecom.md` | `skill install` |
+| Codex (project) | `<project>/AGENTS.md` | `skill install` / ソースツリーのスクリプト |
+| Codex (user) | `~/.codex/instructions.md` | `skill install` / スクリプト |
 
 再実行は冪等です（マーカーで囲んだセクションを上書き）。
 

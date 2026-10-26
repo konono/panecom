@@ -41,6 +41,32 @@ func TestPickPaneSelectsNextAndCanCancel(t *testing.T) {
 	}
 }
 
+func TestPromptRoleCompletion(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+		ok                bool
+	}{
+		{"first suggestion", "\t\r", "developer", true},
+		{"cycle suggestion", "\t\t\r", "reviewer", true},
+		{"prefix", "rev\t\r", "reviewer", true},
+		{"backspace", "reviewx\x7fer\t\r", "reviewer", true},
+		{"custom role", "architect\r", "architect", true},
+		{"cancel", "\x1b", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			got, ok, err := promptRole(strings.NewReader(tt.input), &out)
+			if err != nil || ok != tt.ok || got != tt.want {
+				t.Fatalf("role=%q ok=%v err=%v, want %q %v", got, ok, err, tt.want, tt.ok)
+			}
+			if !strings.Contains(out.String(), "Role name") {
+				t.Errorf("missing prompt: %q", out.String())
+			}
+		})
+	}
+}
+
 func TestPickPaneDelayedArrowSequence(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
