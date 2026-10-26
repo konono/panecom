@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0](https://github.com/konono/panecom/compare/v0.4.0...v1.0.0) (2026-10-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **namespace:** namespace identity changed. Panes registered by an earlier version must run `panecom register` again before they can see panes registered by this one.
+
+### Features
+
+* **link:** address roles in other projects as project/role ([f27d000](https://github.com/konono/panecom/commit/f27d000dc9a95ae4e2503fb3933aac8551d07804))
+
+
+### Bug Fixes
+
+* anchor namespaces and link roles across projects ([051c42e](https://github.com/konono/panecom/commit/051c42e651055f19ed2eaa8f5c19e2cfaa2ad114))
+* **namespace:** anchor namespaces to the project root ([045fc39](https://github.com/konono/panecom/commit/045fc3925d0fe9f48fc805a2aa52a7b2dc0f690e))
+
 ## [0.4.0](https://github.com/konono/panecom/compare/v0.3.0...v0.4.0) (2026-10-20)
 
 
