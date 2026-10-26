@@ -45,7 +45,7 @@ func (t *TmuxMux) ListPanes(sessionName string) ([]Pane, error) {
 			return nil, err
 		}
 	}
-	out, err := t.runner.Output("tmux", "list-panes", "-s", "-t", target, "-F", "#{pane_id}\t#{window_id}\t#{window_name}")
+	out, err := t.runner.Output("tmux", "list-panes", "-s", "-t", target, "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tmux panes: %w", err)
 	}
@@ -54,14 +54,17 @@ func (t *TmuxMux) ListPanes(sessionName string) ([]Pane, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
 			continue
 		}
 		panes = append(panes, Pane{
 			ID:      parts[0],
 			TabID:   parts[1],
 			TabName: parts[2],
+			Title:   parts[3],
+			Cwd:     parts[4],
+			Command: parts[5],
 		})
 	}
 	return panes, nil

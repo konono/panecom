@@ -10,6 +10,9 @@ type Pane struct {
 	ID      string
 	TabID   string
 	TabName string
+	Title   string
+	Cwd     string
+	Command string
 }
 
 type Multiplexer interface {

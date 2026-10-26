@@ -332,17 +332,30 @@ func sendToPane(paneID, message string) error {
 
 func cmdRegister(role string) {
 	validateRole(role)
-	session, sRoot := requireSession()
+	session, _ := requireSession()
 	paneID := requirePaneID()
-	anchor := namespaceAnchor()
+	if err := registerPane(role, paneID, namespaceAnchor(), session); err != nil {
+		die(err.Error())
+	}
+	fmt.Println(role)
+}
+
+// registerPane writes a pane mapping in the store for the selected project's
+// anchor. Keeping this separate from cmdRegister lets the interactive picker
+// register another pane without sending text to whatever runs inside it.
+func registerPane(role, paneID, anchor, session string) error {
+	if !rolePattern.MatchString(role) {
+		return fmt.Errorf("invalid role name '%s' (must match [A-Za-z0-9][A-Za-z0-9._-]*)", role)
+	}
+	sRoot := sessionRootIn(stateRootFor(anchor), mux.Kind(), session)
 	anchorHash := hashString(anchor)
 	nsDir := namespaceDir(sRoot, anchor)
 
 	if err := atomicWrite(filepath.Join(sRoot, ".session"), session); err != nil {
-		die("failed to write session state: " + err.Error())
+		return fmt.Errorf("failed to write session state: %w", err)
 	}
 	if err := atomicWrite(filepath.Join(nsDir, ".cwd"), anchor); err != nil {
-		die("failed to write namespace state: " + err.Error())
+		return fmt.Errorf("failed to write namespace state: %w", err)
 	}
 
 	prevNsDir, err := namespaceForCurrentPane(sRoot, paneID)
@@ -363,15 +376,14 @@ func cmdRegister(role string) {
 	}
 
 	if err := atomicWrite(filepath.Join(nsDir, "roles", role), paneID); err != nil {
-		die("failed to write role: " + err.Error())
+		return fmt.Errorf("failed to write role: %w", err)
 	}
 	if err := atomicWrite(filepath.Join(sRoot, "panes", paneID), anchorHash); err != nil {
-		die("failed to write pane mapping: " + err.Error())
+		return fmt.Errorf("failed to write pane mapping: %w", err)
 	}
 
 	_ = mux.RenamePane(paneID, fmt.Sprintf("panecom:%s", role))
-
-	fmt.Println(role)
+	return nil
 }
 
 func cmdOpen(role string, direction string, binPath string) {
@@ -1524,6 +1536,7 @@ func usage() {
   panecom [--mux zellij|tmux] <command> [args...]
 
 Commands:
+  register                       Choose a pane and role interactively
   register <role>                Register current pane as <role>
   whoami                         Show current pane's role
   list [--all | <project>]       List roles here, or in a linked project
@@ -1589,10 +1602,14 @@ func main() {
 
 	switch args[0] {
 	case "register":
-		if len(args) != 2 {
+		switch len(args) {
+		case 1:
+			cmdRegisterInteractive()
+		case 2:
+			cmdRegister(args[1])
+		default:
 			usage()
 		}
-		cmdRegister(args[1])
 	case "whoami":
 		if len(args) != 1 {
 			usage()

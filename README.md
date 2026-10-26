@@ -77,6 +77,21 @@ panecom register reviewer
 codex  # または claude 等
 ```
 
+Pane B に移動せずに登録する場合は、Pane A で `panecom register` を実行します。上下キー（または `j`/`k`）で pane を選び、画面のプレビューを確認して Enter、続いて role 名を入力してください。選んだ pane の作業ディレクトリからプロジェクトを判定します。作業ディレクトリを取得できない場合は、プロジェクトのパスも入力します。`q` で選択を中止できます。対象 pane にコマンドは送られません。
+
+```text
+$ panecom register
+Select a pane  ↑/↓ or j/k: move  Enter: select  q: cancel
+
+  [app] claude  /path/to/app
+> [mcp] codex   /path/to/mcp
+
+Preview:
+...
+Role name: m
+m -> codex (/path/to/mcp)
+```
+
 > 両方の pane は **同じセッション内**、**同じプロジェクト** から register してください。これが同じ namespace に所属する条件です。プロジェクトは register 時の作業ディレクトリから遡って判定されるので、リポジトリ内のどのディレクトリで register しても構いません。
 
 4. 通信する:
@@ -120,6 +135,7 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | コマンド | 説明 |
 |---|---|
 | `[--mux zellij\|tmux]` | マルチプレクサを明示指定（省略時は自動検出） |
+| `register` | pane を画面で選び、role 名を入力して登録 |
 | `register <role>` | 現在の pane を role として登録 |
 | `whoami` | 現在の pane の role を表示 |
 | `list [--all \| <project>]` | role 一覧を表示（自分 / リンク先 / 全部） |
