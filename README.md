@@ -120,7 +120,7 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 panecom focus reviewer                      # Pane B に移動する
 ```
 
-> **注意**: `tell` / `send` は対象 pane に文字列 + Enter を注入します。対象が素のシェルの場合、送信内容がコマンドとして実行されます。エージェントの入力として使うか、`exec` コマンドを使ってください。
+> **注意**: `tell` / `send` は対象 pane に文字列 + Enter を注入します。対象が素のシェルの場合、送信内容がコマンドとして実行されます。エージェントの入力には `tell` を使ってください。
 
 ### tell と send の使い分け
 
@@ -197,7 +197,6 @@ $ panecom tell reviewer "レビューをお願いします"
 | `dump [--full] <role>` | 対象 pane の画面を取得 |
 | `send [--no-verify] [--verify-timeout N] <role> <msg>` | 対象 pane に文字列をそのまま打ち込む（配信確認あり） |
 | `share [--full] <role>` | 自分の画面を相手に共有 |
-| `exec [--timeout N] <role> <cmd>` | 対象 pane でコマンドを実行し結果を返す |
 | `profile [-f] <name>` | プロファイルから環境を構築 |
 | `skill install` | agent と scope を選んで skill を適用 |
 | `skill list` | panecom が配布を記録した skill の一覧 |
@@ -215,11 +214,7 @@ $ panecom tell reviewer "レビューをお願いします"
 
 - `-d right|down` — pane を開く方向（デフォルト: 未指定で Zellij の自動配置）
 
-### exec
-
-- `--timeout N` — コマンド完了待ちのタイムアウト秒数（デフォルト: `30`）。タイムアウトは呼び出し側の待機を止めるだけで、**対象 pane で実行中のコマンドは停止しません**
-
-ターミナルには `PANECOM_TOKEN=<token> panecom exec -- $'<command>'` と表示されます。`PANECOM_TOKEN` は request の一意性を保証するためのプロトコル要素で、省略できません。コマンドは先頭スペース付きで送信されるため、シェルの `HIST_IGNORE_SPACE` が有効であればヒストリに記録されません。
+### send / tell
 
 ```bash
 # ~/.zshrc に追加（推奨）
@@ -297,7 +292,7 @@ profiles:
         direction: down
 ```
 
-`panecom profile dev` 後、developer の Claude から `panecom exec terminal "make test"` でターミナルにコマンドを送れます。
+`panecom profile dev` 後、developer の Claude から `panecom send terminal "make test"` でターミナルにコマンドを送り、`panecom dump terminal` で結果を読めます。
 
 ### プロファイルの各フィールド
 
@@ -361,9 +356,10 @@ $ panecom link mcp ../rh_sc_mcp
 mcp -> /path/to/rh_sc_mcp
   developer    terminal_12
   reviewer     terminal_13
+  terminal     terminal_14
 
-$ panecom send mcp/reviewer "schema 確認お願いします"
-$ panecom exec mcp/developer "git status"
+$ panecom tell mcp/reviewer "schema 確認お願いします"   # エージェント宛は tell
+$ panecom send mcp/terminal "git status"                # シェル pane 宛は send
 ```
 
 `link` は相手の role をその場で検証して一覧表示します。相手がまだ register していなければ失敗するので、送信時まで気づかないということがありません。相手の起動前に張っておきたい場合は `-f` を使います。
@@ -399,7 +395,7 @@ $ panecom cleanup -n      # 消す対象を確認（削除しない）
 $ panecom cleanup         # 削除
 ```
 
-`send` / `resolve` / `dump` / `exec` / `share` / `focus` は stale な role に当たった時点でその登録を自動的に削除します。`cleanup` は誰も触らないまま残った分をまとめて片付けるためのものです。
+`tell` / `send` / `resolve` / `dump` / `share` / `focus` は stale な role に当たった時点でその登録を自動的に削除します。`cleanup` は誰も触らないまま残った分をまとめて片付けるためのものです。
 
 pane の生存確認そのものに失敗した role は `(unknown)` と表示され、削除されません。マルチプレクサが応答しないだけで全 role が消えるのを防ぐためです。
 
@@ -474,38 +470,28 @@ profiles:
 │       ├── panes/
 │       ├── namespaces/
 │       └── .session
-├── exec.lock            # exec 実行中ロック（同時実行防止、atomic）
-└── exec/                # exec のランタイム状態
-    ├── current -> <token> # 最新 exec へのシンボリックリンク
-    └── <token>/          # request ごとのデータ
-        ├── command       # 実行中のコマンド
-        ├── stdout        # stdout（リアルタイム書き込み）
-        ├── stderr        # stderr（リアルタイム書き込み）
-        └── exitcode      # 終了コード（完了時に作成）
 ```
 
-`sessions/` と `exec/` はランタイムデータです。`.gitignore` に追加してください:
+`sessions/` はランタイムデータです。`.gitignore` に追加してください:
 
 ```
 .panecom/sessions/
+# v3.0.0 より前の exec の残骸。新規には作られないが、
+# 既存データにはコマンドとその出力が含まれる
 .panecom/exec/
 .panecom/exec.lock
 ```
 
-exec は同時に1つだけ実行できます（`exec.lock` で排他制御）。実行中に別の exec を開始するとエラーになります。
-完了済みの古い exec データは次回の exec 開始時に自動削除されます。
-実行中の進捗は `cat .panecom/exec/current/stdout` で確認できます。
+v3.0.0 より前のバージョンは `.panecom/exec/` と `.panecom/exec.lock` も作成していました。`exec` コマンドの削除に伴い新規には作られませんが、**既存のデータは残ります**。実行したコマンドと stdout / stderr が入っているため、ignore は外さず、不要なら削除してください。
 
 ## Safety
 
 panecom は対象 pane に対して **直接的な文字列注入と任意コマンド実行** を行います。
 
-- **`send`** は対象 pane に文字列と Enter を注入します。対象がシェルの場合、送信内容はコマンドとして実行されます。メッセージ API ではありません
-- **`exec`** は対象 pane 上で `sh -c` 経由のコマンド実行です。呼び出し側のサンドボックスや権限管理の外で動作します
-- **`exec --timeout`** のタイムアウトは呼び出し側の待機を止めるだけです。対象 pane で実行中のコマンドは停止しません
+- **`send` / `tell`** は対象 pane に文字列と Enter を注入します。対象がシェルの場合、送信内容はコマンドとして実行されます。メッセージ API ではありません。呼び出し側のサンドボックスや権限管理の外で動作します
 - **`dump` / `share`** は対象 pane の画面内容を転送します。画面に表示されている機密情報が含まれる可能性があります
 
-**信頼境界**: 登録済み role への send / exec は、対象 pane のユーザー権限で任意の操作が可能です。信頼できる role にのみ送信してください。マルチエージェント連携の用途ではこれは想定どおりの動作です。
+**信頼境界**: 登録済み role への send / tell は、対象 pane のユーザー権限で任意の操作が可能です。信頼できる role にのみ送信してください。マルチエージェント連携の用途ではこれは想定どおりの動作です。
 
 ## AI エージェント向け Skill
 
