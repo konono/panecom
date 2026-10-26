@@ -149,7 +149,7 @@ func writeManifest(home string, m skillManifest) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if err := tmp.Chmod(0600); err != nil {
 		_ = tmp.Close()
 		return err
@@ -590,7 +590,7 @@ func cmdSkillInstall() error {
 	if err != nil {
 		return fmt.Errorf("interactive skill install needs a terminal: %w", err)
 	}
-	defer tty.Close()
+	defer func() { _ = tty.Close() }()
 	targets, ok, err := pickSkillTargetsTTY(tty, home, namespaceAnchor())
 	if err != nil {
 		return err
@@ -682,7 +682,7 @@ func cmdSkillUninstall() error {
 	if err != nil {
 		return fmt.Errorf("interactive skill uninstall needs a terminal: %w", err)
 	}
-	defer tty.Close()
+	defer func() { _ = tty.Close() }()
 	in := bufio.NewReader(tty)
 	_, _ = fmt.Fprintln(tty, "Tracked installations:")
 	choices := map[string]string{"a": "all", "all": "all", "": "cancel"}
