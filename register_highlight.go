@@ -75,7 +75,23 @@ func (h *tmuxPaneHighlighter) Select(p Pane) error {
 	if h.current == p.ID {
 		return nil
 	}
+	marked := h.current
+	if marked == "" {
+		marked = h.original
+	}
+	if marked == p.ID {
+		h.current = p.ID
+		return nil
+	}
+	if marked != "" {
+		if err := h.runner.Run("tmux", "select-pane", "-M", "-t", marked); err != nil {
+			return err
+		}
+	}
 	if err := h.runner.Run("tmux", "select-pane", "-m", "-t", p.ID); err != nil {
+		if marked != "" {
+			_ = h.runner.Run("tmux", "select-pane", "-m", "-t", marked)
+		}
 		return err
 	}
 	h.current = p.ID
@@ -86,10 +102,11 @@ func (h *tmuxPaneHighlighter) Restore() {
 	if h.current == "" {
 		return
 	}
-	if h.original != "" {
-		_ = h.runner.Run("tmux", "select-pane", "-m", "-t", h.original)
-	} else {
+	if h.original != h.current {
 		_ = h.runner.Run("tmux", "select-pane", "-M", "-t", h.current)
+		if h.original != "" {
+			_ = h.runner.Run("tmux", "select-pane", "-m", "-t", h.original)
+		}
 	}
 	h.current = ""
 }

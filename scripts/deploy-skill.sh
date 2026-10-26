@@ -45,7 +45,7 @@ if [ -f "$agents_md" ]; then
     section_file=$(mktemp)
     printf '%s\n' "$panecom_section" > "$section_file"
     awk -v start="$marker_start" -v end="$marker_end" -v newfile="$section_file" '
-      $0 == start { while ((getline line < newfile) > 0) print line; skip=1; next }
+      $0 == start { while ((getline line < newfile) > 0) print line; close(newfile); skip=1; next }
       $0 == end { skip=0; next }
       !skip { print }
     ' "$agents_md" > "$tmpfile"
@@ -69,7 +69,7 @@ if [ -d "$HOME/.codex" ] || mkdir -p "$HOME/.codex" 2>/dev/null; then
       section_file=$(mktemp)
       printf '%s\n' "$panecom_section" > "$section_file"
       awk -v start="$marker_start" -v end="$marker_end" -v newfile="$section_file" '
-        $0 == start { while ((getline line < newfile) > 0) print line; skip=1; next }
+        $0 == start { while ((getline line < newfile) > 0) print line; close(newfile); skip=1; next }
         $0 == end { skip=0; next }
         !skip { print }
       ' "$codex_global" > "$tmpfile"

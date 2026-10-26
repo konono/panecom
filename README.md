@@ -77,7 +77,7 @@ panecom register reviewer
 codex  # または claude 等
 ```
 
-Pane B に移動せずに登録する場合は、Pane A で `panecom register` を実行します。現在のタブ／ウィンドウ内で、矢印キー（または `h`/`j`/`k`/`l`）を使って画面上の上下左右にある pane を選び、Enter、続いて role 名を入力してください。端に着いても選択は飛びません。選んだ pane は Zellij では一時的に色付き、tmux では mark 表示され、画面のプレビューも表示されます。選んだ pane の作業ディレクトリからプロジェクトを判定します。作業ディレクトリを取得できない場合は、プロジェクトのパスも入力します。`Esc` または `q` で選択を中止できます。対象 pane にコマンドは送られません。
+Pane B に移動せずに登録する場合は、Pane A で `panecom register` を実行します。現在のタブ／ウィンドウ内で、矢印キー（または `h`/`j`/`k`/`l`）を使って画面上の上下左右にある pane を選び、Enter、続いて role 名を入力してください。端に着いても選択は飛びません。選んだ pane は Zellij では一時的に色付き、tmux では mark 表示され、画面のプレビューも表示されます。選んだ pane の作業ディレクトリからプロジェクトを判定します。作業ディレクトリを取得できない場合は、プロジェクトのパスも入力します。`Esc` または `q` で選択を中止できます。対象 pane にコマンドは送られませんが、対象プロジェクトの `.panecom/` に登録状態を書き込み（存在しなければ作成）、pane のタイトルを `panecom:<role>` に変更します。別プロジェクトの pane を選ぶと、そのプロジェクトに登録され、呼び出し元からは `panecom link` 後に `<project>/<role>` で参照できます。
 
 Zellij の色は選択画面を閉じると標準色に戻ります。選択前に `set-pane-color` で個別に設定した色は復元されません。
 
@@ -87,12 +87,12 @@ Select a pane  arrows/hjkl: move  Enter: select  Esc/q: cancel
 Tab/window: app  (0)
 
   [app] terminal_1  claude  /path/to/app
-> [mcp] terminal_2  codex   /path/to/mcp
+> [app] terminal_2  codex   /path/to/app
 
 Preview:
 ...
 Role name: m
-m -> codex (/path/to/mcp)
+m -> codex (/path/to/app)
 ```
 
 > 両方の pane は **同じセッション内**、**同じプロジェクト** から register してください。これが同じ namespace に所属する条件です。プロジェクトは register 時の作業ディレクトリから遡って判定されるので、リポジトリ内のどのディレクトリで register しても構いません。

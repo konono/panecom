@@ -91,6 +91,9 @@ func cmdRegisterInteractive() {
 		die(err.Error())
 	}
 	fmt.Printf("%s -> %s (%s)\n", role, pane.Title, anchor)
+	if anchor != namespaceAnchor() {
+		fmt.Fprintf(os.Stderr, "panecom: registered in another project; to use it here, run: panecom link <project> %q, then address <project>/%s\n", anchor, role)
+	}
 }
 
 func panesInCurrentTab(panes []Pane, currentID string) ([]Pane, error) {
@@ -194,7 +197,11 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 			selected = spatialNeighbor(panes, selected, 'R')
 		case 27:
 			// A lone Esc cancels; arrow keys arrive as Esc [ A/B/C/D.
-			if !inputReady(in, escapeSequenceTimeoutMS) {
+			ready, err := inputReady(in, escapeSequenceTimeoutMS)
+			if err != nil {
+				return Pane{}, false, err
+			}
+			if !ready {
 				return Pane{}, false, nil
 			}
 			prefix, err := readByte()
@@ -209,8 +216,12 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 			}
 			// CSI may contain modifiers such as Esc [ 1 ; 2 B.
 			for i := 0; i < 16; i++ {
-				if !inputReady(in, escapeSequenceTimeoutMS) {
-					return Pane{}, false, nil
+				ready, err := inputReady(in, escapeSequenceTimeoutMS)
+				if err != nil {
+					return Pane{}, false, err
+				}
+				if !ready {
+					break
 				}
 				code, err := readByte()
 				if err != nil {
@@ -241,17 +252,17 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 
 // inputReady waits only for a terminal file. Other readers (used by tests)
 // report EOF normally, so the picker can also be tested without a real TTY.
-func inputReady(in io.Reader, timeoutMS int) bool {
+func inputReady(in io.Reader, timeoutMS int) (bool, error) {
 	f, ok := in.(*os.File)
 	if !ok {
-		return true
+		return true, nil
 	}
 	fd := int(f.Fd())
 	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return false
+			return false, nil
 		}
 		var readSet unix.FdSet
 		readSet.Set(fd)
@@ -260,7 +271,10 @@ func inputReady(in io.Reader, timeoutMS int) bool {
 		if err == unix.EINTR {
 			continue
 		}
-		return err == nil && n > 0 && readSet.IsSet(fd)
+		if err != nil {
+			return false, err
+		}
+		return n > 0 && readSet.IsSet(fd), nil
 	}
 }
 
