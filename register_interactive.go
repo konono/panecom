@@ -62,7 +62,7 @@ func cmdRegisterInteractive() {
 	if err != nil {
 		die("interactive register needs a terminal (or use: panecom register <role>)")
 	}
-	defer tty.Close()
+	defer func() { _ = tty.Close() }()
 
 	pane, ok, err := pickPaneTTY(tty, panes, currentID)
 	if err != nil {

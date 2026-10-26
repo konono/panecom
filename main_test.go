@@ -373,7 +373,7 @@ func TestWhoamiReportsRegisteredPaneAndNamespace(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer reader.Close()
+		defer func() { _ = reader.Close() }()
 		oldStdout := os.Stdout
 		os.Stdout = writer
 		defer func() { os.Stdout = oldStdout }()

@@ -46,8 +46,8 @@ func TestPickPaneDelayedArrowSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	go func() {
 		_, _ = writer.Write([]byte{27})
 		time.Sleep(250 * time.Millisecond)

@@ -58,9 +58,9 @@ type legacyRegistration struct {
 func warnLegacyRegistrations(w io.Writer, sRoot, session, anchor string) {
 	for _, old := range legacyRegistrations(sRoot, session, anchor) {
 		if old.ConflictPaneID != "" {
-			fmt.Fprintf(w, "panecom: old namespace %s has %s (%s), but it belongs to %s here; choose a different role before re-registering\n", old.Anchor, old.Role, old.PaneID, old.ConflictPaneID)
+			_, _ = fmt.Fprintf(w, "panecom: old namespace %s has %s (%s), but it belongs to %s here; choose a different role before re-registering\n", old.Anchor, old.Role, old.PaneID, old.ConflictPaneID)
 			continue
 		}
-		fmt.Fprintf(w, "panecom: old namespace %s still has %s (%s); with that pane in this project, run 'panecom register %s' there or select it with 'panecom register' from its tab\n", old.Anchor, old.Role, old.PaneID, old.Role)
+		_, _ = fmt.Fprintf(w, "panecom: old namespace %s still has %s (%s); with that pane in this project, run 'panecom register %s' there or select it with 'panecom register' from its tab\n", old.Anchor, old.Role, old.PaneID, old.Role)
 	}
 }
