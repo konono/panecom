@@ -76,6 +76,13 @@ func (z *ZellijMux) listPanes() ([]Pane, error) {
 			})
 		}
 	}
+	if len(panes) == 0 {
+		// The command we are running occupies a pane of this session, so an
+		// empty list means the response was not understood rather than that
+		// nothing is open. Reporting no panes would mark every registered
+		// role as dead and invite cleanup to delete all of them.
+		return nil, fmt.Errorf("'zellij action list-panes' reported no terminal panes")
+	}
 	return panes, nil
 }
 
@@ -91,11 +98,19 @@ func (z *ZellijMux) ListSessions() ([]string, error) {
 	var names []string
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.Contains(line, "EXITED") {
+		if line == "" {
 			continue
 		}
-		name := strings.Fields(line)[0]
-		names = append(names, name)
+		// The line is "<name> [Created ...] (<status>)". Look for the status
+		// only after the bracket: a session named EXITED-work is running.
+		status := ""
+		if i := strings.LastIndex(line, "]"); i >= 0 {
+			status = line[i+1:]
+		}
+		if strings.Contains(status, "EXITED") {
+			continue
+		}
+		names = append(names, strings.Fields(line)[0])
 	}
 	if len(names) == 0 {
 		// We are running inside a session, so an empty result means the

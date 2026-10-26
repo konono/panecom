@@ -346,3 +346,45 @@ func TestTmuxOpenRegistersWithMuxKind(t *testing.T) {
 }
 
 var _ = os.PathSeparator
+
+// The mirror of the zellij case: blank or malformed list-panes output used to
+// read as "no panes exist", which marks every role dead and lets cleanup
+// delete the namespace.
+func TestTmuxEmptyPaneListDoesNotRetireRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		output string
+	}{
+		{"blank", ""},
+		{"whitespace", "\n\n"},
+		{"too few fields", "%3\t@0\twin\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TMUX", "/tmp/tmux-501/default,12345,0")
+			t.Setenv("TMUX_PANE", "%3")
+			t.Setenv("ZELLIJ_SESSION_NAME", "")
+			t.Setenv("ZELLIJ_PANE_ID", "")
+			t.Setenv("PANECOM_STATE_DIR", t.TempDir())
+
+			r := newFakeRunner()
+			r.Stub([]byte("my-session\n"), "tmux", "display-message", "-p", "#{session_name}")
+			r.Stub([]byte(tc.output), "tmux", "list-panes", "-s", "-t", "my-session", "-F",
+				"#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}")
+			r.Stub([]byte("my-session\n"), "tmux", "list-sessions", "-F", "#{session_name}")
+			tm := &TmuxMux{runner: r}
+			prev := mux
+			mux = tm
+			t.Cleanup(func() { mux = prev })
+
+			nsDir := seedRealMuxSession(t, "tmux", "my-session", "%3")
+			if _, err := tm.PaneExists("my-session", "%3"); err == nil {
+				t.Error("an empty pane list must be reported as an error, not as absence")
+			}
+
+			cmdCleanup(false, false)
+			if _, err := resolveRole(nsDir, "reviewer"); err != nil {
+				t.Errorf("cleanup deleted a role on an unreadable pane list: %v", err)
+			}
+		})
+	}
+}

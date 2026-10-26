@@ -495,3 +495,106 @@ func TestZellijListSessionsRejectsUnreadableOutput(t *testing.T) {
 		t.Errorf("want an error for unparseable output, got %v", got)
 	}
 }
+
+// seedRealMuxSession lays out the state a registered role leaves behind, so a
+// cleanup run against a real multiplexer implementation has something to lose.
+func seedRealMuxSession(t *testing.T, kind, session, paneID string) string {
+	t.Helper()
+	sRoot := sessionRoot(kind, session)
+	cwd := canonicalCwd()
+	nsDir := namespaceDir(sRoot, cwd)
+	for path, value := range map[string]string{
+		filepath.Join(sRoot, ".session"):          session,
+		filepath.Join(nsDir, ".cwd"):              cwd,
+		filepath.Join(nsDir, "roles", "reviewer"): paneID,
+		filepath.Join(sRoot, "panes", paneID):     hashString(cwd),
+	} {
+		if err := atomicWrite(path, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return nsDir
+}
+
+// An empty or unreadable pane list used to come back as "no panes exist",
+// which made every role look dead. cleanup acts on that judgement, so the
+// whole namespace could be deleted because one query came back blank.
+func TestZellijEmptyPaneListDoesNotRetireRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		output string
+	}{
+		{"null", "null"},
+		{"empty array", "[]"},
+		{"blank", ""},
+		{"only plugin panes", `[{"id":1,"is_plugin":true}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ZELLIJ_SESSION_NAME", "test-session")
+			t.Setenv("ZELLIJ_PANE_ID", "3")
+			t.Setenv("PANECOM_STATE_DIR", t.TempDir())
+
+			r := newFakeRunner()
+			r.Stub([]byte(tc.output), "zellij", "action", "list-panes", "--json", "--all")
+			r.Stub([]byte("test-session [Created 1h ago] (current)\n"), "zellij", "list-sessions", "--no-formatting")
+			z := &ZellijMux{runner: r}
+			prev := mux
+			mux = z
+			t.Cleanup(func() { mux = prev })
+
+			nsDir := seedRealMuxSession(t, "zellij", "test-session", "terminal_3")
+			if _, err := z.PaneExists("test-session", "terminal_3"); err == nil {
+				t.Error("an empty pane list must be reported as an error, not as absence")
+			}
+
+			cmdCleanup(false, false)
+			if _, err := resolveRole(nsDir, "reviewer"); err != nil {
+				t.Errorf("cleanup deleted a role on an unreadable pane list: %v", err)
+			}
+		})
+	}
+}
+
+func TestZellijListSessionsKeepsASessionNamedExited(t *testing.T) {
+	r := newFakeRunner()
+	r.Stub([]byte("EXITED-work [Created 1h ago] (current)\n"+
+		"old-one [Created 25days ago] (EXITED - attach to resurrect)\n"),
+		"zellij", "list-sessions", "--no-formatting")
+	z := &ZellijMux{runner: r}
+
+	got, err := z.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The marker belongs to the status, not to the name.
+	if len(got) != 1 || got[0] != "EXITED-work" {
+		t.Fatalf("sessions = %v, want [EXITED-work]", got)
+	}
+}
+
+func TestCleanupKeepsTheStateOfASessionNamedExited(t *testing.T) {
+	t.Setenv("ZELLIJ_SESSION_NAME", "ours")
+	t.Setenv("ZELLIJ_PANE_ID", "3")
+	t.Setenv("PANECOM_STATE_DIR", t.TempDir())
+
+	r := newFakeRunner()
+	r.Stub([]byte(`[{"id":3,"tab_id":0,"pane_command":"zsh"}]`), "zellij", "action", "list-panes", "--json", "--all")
+	r.Stub([]byte("ours [Created 1h ago] (current)\n"+
+		"EXITED-work [Created 2h ago]\n"),
+		"zellij", "list-sessions", "--no-formatting")
+	z := &ZellijMux{runner: r}
+	prev := mux
+	mux = z
+	t.Cleanup(func() { mux = prev })
+
+	seedRealMuxSession(t, "zellij", "ours", "terminal_3")
+	running := sessionRoot("zellij", "EXITED-work")
+	if err := atomicWrite(filepath.Join(running, ".session"), "EXITED-work"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmdCleanup(false, false)
+	if _, err := os.Stat(running); err != nil {
+		t.Errorf("the state of a running session named EXITED-work was deleted: %v", err)
+	}
+}

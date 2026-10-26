@@ -81,6 +81,12 @@ func (t *TmuxMux) listPanes(sessionName string) ([]Pane, error) {
 			Height:  height,
 		})
 	}
+	if len(panes) == 0 {
+		// Empty or unparseable output is not an empty session: this command
+		// runs in a pane of it. Treating it as empty would mark every
+		// registered role as dead and invite cleanup to delete all of them.
+		return nil, fmt.Errorf("'tmux list-panes' reported no panes for session '%s'", target)
+	}
 	return panes, nil
 }
 
