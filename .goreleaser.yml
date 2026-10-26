@@ -12,10 +12,10 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - '-s -w -X main.Version={{ .Version }}'
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
