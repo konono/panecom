@@ -97,7 +97,7 @@ m -> codex (/path/to/app)
 
 > 両方の pane は **同じセッション内**、**同じプロジェクト** から register してください。これが同じ namespace に所属する条件です。プロジェクトは register 時の作業ディレクトリから遡って判定されるので、リポジトリ内のどのディレクトリで register しても構いません。
 
-登録内容は `panecom whoami` で確認できます。namespace は現在のディレクトリではなく、登録時に保存されたものを表示します。
+登録内容は `panecom whoami` で確認できます。同じプロジェクト内で作業ディレクトリを移動しても、登録時に保存された namespace を表示します。別プロジェクトへ移動し、state store も変わった場合は登録が見つからずエラーになります。従来の role だけの出力をスクリプトで使う場合は `panecom whoami --role` に変更してください。
 
 ```text
 $ panecom whoami
@@ -151,7 +151,7 @@ panecom dump reviewer                       # Pane B の現在画面を取得
 | `[--mux zellij\|tmux]` | マルチプレクサを明示指定（省略時は自動検出） |
 | `register` | pane を画面で選び、role 名を入力して登録 |
 | `register <role>` | 現在の pane を role として登録 |
-| `whoami` | 現在の pane の role、pane ID、登録時の namespace を表示 |
+| `whoami [--role]` | 現在の pane の role、pane ID、登録時の namespace を表示（`--role` は role のみ） |
 | `list [--all \| <project>]` | role 一覧を表示（自分 / リンク先 / 全部） |
 | `link [-f] <project> <path>` | 別プロジェクトをリンク（引数なしでリンク一覧） |
 | `unlink <project>` | リンクを削除 |

@@ -409,7 +409,7 @@ func cmdOpen(role string, direction string, binPath string) {
 	fmt.Println(newPaneID)
 }
 
-func cmdWhoami() {
+func cmdWhoami(roleOnly bool) {
 	_, sRoot := requireSession()
 	paneID := requirePaneID()
 
@@ -426,7 +426,15 @@ func cmdWhoami() {
 	for _, e := range entries {
 		content, _ := readFile(filepath.Join(nsDir, "roles", e.Name()))
 		if content == paneID {
-			fmt.Printf("role: %s\npane: %s\nnamespace: %s\n", e.Name(), paneID, describeNamespace(nsDir))
+			if roleOnly {
+				fmt.Println(e.Name())
+				return
+			}
+			anchor, err := readFile(filepath.Join(nsDir, ".cwd"))
+			if err != nil || anchor == "" {
+				anchor = "(unknown)"
+			}
+			fmt.Printf("role: %s\npane: %s\nnamespace: %s\n", e.Name(), paneID, anchor)
 			return
 		}
 	}
@@ -1543,7 +1551,8 @@ Commands:
   register                       Choose a pane and role interactively
                                  Arrows: move by pane layout in this tab
   register <role>                Register current pane as <role>
-  whoami                         Show current pane's role, ID, and namespace
+  whoami [--role]                Show current role, pane ID, and namespace
+                                 --role prints only the role for scripts
   list [--all | <project>]       List roles here, or in a linked project
   link [-f] <project> <path>     Link a project so its roles can be addressed
                                  as <project>/<role>; no args lists links
@@ -1616,10 +1625,10 @@ func main() {
 			usage()
 		}
 	case "whoami":
-		if len(args) != 1 {
+		if len(args) > 2 || len(args) == 2 && args[1] != "--role" {
 			usage()
 		}
-		cmdWhoami()
+		cmdWhoami(len(args) == 2)
 	case "link":
 		force := false
 		positional := []string{}

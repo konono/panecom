@@ -362,28 +362,39 @@ func TestWhoamiReportsRegisteredPaneAndNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
+	capture := func(roleOnly bool) string {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.Close()
+		oldStdout := os.Stdout
+		os.Stdout = writer
+		defer func() { os.Stdout = oldStdout }()
+		inDir(t, b, func() { cmdWhoami(roleOnly) })
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		output, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(output)
 	}
-	oldStdout := os.Stdout
-	os.Stdout = writer
-	defer func() {
-		os.Stdout = oldStdout
-		_ = reader.Close()
-		_ = writer.Close()
-	}()
-	inDir(t, b, func() { cmdWhoami() })
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	output, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	output := capture(false)
 	want := "role: d\npane: terminal_510\nnamespace: " + resolvedPath(t, a) + "\n"
-	if string(output) != want {
+	if output != want {
 		t.Fatalf("whoami = %q, want %q", output, want)
+	}
+	if output := capture(true); output != "d\n" {
+		t.Fatalf("whoami --role = %q, want d", output)
+	}
+	nsDir := namespaceDir(sessionRootIn(stateRootFor(a), f.Kind(), "fake"), resolvedPath(t, a))
+	if err := os.Remove(filepath.Join(nsDir, ".cwd")); err != nil {
+		t.Fatal(err)
+	}
+	if output := capture(false); output != "role: d\npane: terminal_510\nnamespace: (unknown)\n" {
+		t.Fatalf("whoami with missing anchor = %q", output)
 	}
 }
 
