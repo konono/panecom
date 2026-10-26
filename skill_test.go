@@ -320,6 +320,36 @@ func TestAllSkillTargetsDeduplicatesHomeProject(t *testing.T) {
 	}
 }
 
+func TestAllSkillTargetsDeduplicatesSymlinkedHome(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "home")
+	alias := filepath.Join(parent, "home-link")
+	if err := os.Mkdir(home, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, alias); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := allSkillTargets(alias, home)
+	if err != nil || len(targets) != 3 {
+		t.Fatalf("symlinked home produced duplicate targets: %+v err=%v", targets, err)
+	}
+	if targets[0].Path != filepath.Join(alias, ".claude", "skills", "panecom.md") {
+		t.Fatalf("user target path changed: %s", targets[0].Path)
+	}
+	if err := installSkills(alias, targets[:1]); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := readManifest(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untracked, err := untrackedSkills(alias, home, manifest)
+	if err != nil || len(untracked) != 0 {
+		t.Fatalf("installed symlinked target shown as untracked: %+v err=%v", untracked, err)
+	}
+}
+
 func TestPickSkillTargetsSelectsIndependentAgentScopes(t *testing.T) {
 	home, project := t.TempDir(), t.TempDir()
 	targets, err := allSkillTargets(home, project)

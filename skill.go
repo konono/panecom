@@ -478,13 +478,40 @@ func allSkillTargets(home, project string) ([]skillInstall, error) {
 			if err != nil {
 				return nil, err
 			}
-			if !seen[one[0].Path] {
+			key, err := canonicalSkillPath(one[0].Path)
+			if err != nil {
+				return nil, err
+			}
+			if !seen[key] {
 				targets = append(targets, one...)
-				seen[one[0].Path] = true
+				seen[key] = true
 			}
 		}
 	}
 	return targets, nil
+}
+
+// Resolve symlinked parent directories, including when the target file or
+// some parent directories have not been created yet. Do not resolve the file
+// itself: install replaces a symlink at that path, not its referent.
+func canonicalSkillPath(path string) (string, error) {
+	dir := filepath.Dir(path)
+	missing := []string{filepath.Base(path)}
+	for {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, missing...)...), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", err
+		}
+		missing = append([]string{filepath.Base(dir)}, missing...)
+		dir = parent
+	}
 }
 
 func displaySkillPath(target skillInstall) string {
@@ -708,16 +735,28 @@ func cmdSkillList() error {
 func untrackedSkills(home, project string, manifest skillManifest) ([]skillInstall, error) {
 	var found []skillInstall
 	seen := map[string]bool{}
+	tracked := map[string]bool{}
+	for _, install := range manifest.Installs {
+		key, err := canonicalSkillPath(install.Path)
+		if err != nil {
+			return nil, err
+		}
+		tracked[key] = true
+	}
 	for _, scope := range []string{"user", "project"} {
 		targets, err := skillTargets(home, project, "both", scope)
 		if err != nil {
 			return nil, err
 		}
 		for _, target := range targets {
-			if seen[target.Path] || findInstall(manifest, target.Path) >= 0 {
+			key, err := canonicalSkillPath(target.Path)
+			if err != nil {
+				return nil, err
+			}
+			if seen[key] || tracked[key] {
 				continue
 			}
-			seen[target.Path] = true
+			seen[key] = true
 			content, exists, err := readOptional(target.Path)
 			if err != nil {
 				return nil, err
