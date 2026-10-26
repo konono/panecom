@@ -426,7 +426,7 @@ func cmdWhoami() {
 	for _, e := range entries {
 		content, _ := readFile(filepath.Join(nsDir, "roles", e.Name()))
 		if content == paneID {
-			fmt.Println(e.Name())
+			fmt.Printf("role: %s\npane: %s\nnamespace: %s\n", e.Name(), paneID, describeNamespace(nsDir))
 			return
 		}
 	}
@@ -1543,7 +1543,7 @@ Commands:
   register                       Choose a pane and role interactively
                                  Arrows: move by pane layout in this tab
   register <role>                Register current pane as <role>
-  whoami                         Show current pane's role
+  whoami                         Show current pane's role, ID, and namespace
   list [--all | <project>]       List roles here, or in a linked project
   link [-f] <project> <path>     Link a project so its roles can be addressed
                                  as <project>/<role>; no args lists links

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -341,6 +342,48 @@ func TestDescribeNamespaceReportsRegisteredAnchor(t *testing.T) {
 	empty := t.TempDir()
 	if got := describeNamespace(empty); got != empty {
 		t.Errorf("describeNamespace = %s, want the namespace path %s", got, empty)
+	}
+}
+
+func TestWhoamiReportsRegisteredPaneAndNamespace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PANECOM_STATE_DIR", filepath.Join(home, "state"))
+	a := filepath.Join(home, "a")
+	b := filepath.Join(home, "b")
+	for _, dir := range []string{a, b} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &fakeMux{pane: "terminal_510"}
+	withFakeMux(t, f)
+	if err := registerPane("d", "terminal_510", resolvedPath(t, a), "fake"); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = writer
+	defer func() {
+		os.Stdout = oldStdout
+		_ = reader.Close()
+		_ = writer.Close()
+	}()
+	inDir(t, b, func() { cmdWhoami() })
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "role: d\npane: terminal_510\nnamespace: " + resolvedPath(t, a) + "\n"
+	if string(output) != want {
+		t.Fatalf("whoami = %q, want %q", output, want)
 	}
 }
 
