@@ -116,7 +116,7 @@ PANECOM_MUX=tmux panecom <command> # 環境変数
 | pane に文字列をそのまま打ち込む（相手が AI とは限らない） | `panecom send <role> "<text>"` |
 | 他の AI エージェントの画面を見る | `panecom dump <role>` |
 | 共有ターミナルを開く | `panecom open terminal` |
-| 共有ターミナルでコマンドを実行する | `panecom exec terminal "<command>"` |
+| 共有ターミナルでコマンドを実行する | `panecom send terminal "<command>"` + `panecom dump terminal` で結果確認 |
 | 自分の画面を相手に見せる（人が使う） | `panecom share <role>` |
 
 ## tell と send の使い分け（重要）
@@ -143,7 +143,7 @@ panecom send terminal "git status"                        # pane にそのまま
 
 `tell` は未登録の pane から実行するとエラーになる。名乗るのが目的のコマンドなので、先に `panecom register <role>` する。名乗らずに文字列を送りたいだけなら `send` を使う。
 
-なお**シェル pane でコマンドを実行して結果を受け取りたい場合は `exec`** を使う（`send` では結果が返らない）。
+なお `send` は打ち込むだけで**結果は返らない**。シェル pane でコマンドを実行してその結果が必要な場合は、`send` したあと `panecom dump <role>` で画面を読む。
 
 ## 配信確認（tell / send 共通、重要）
 
@@ -183,48 +183,45 @@ panecom tell --verify-timeout 10 <role> "<message>"   # 相手の描画が遅い
 panecom send --no-verify <role> "<text>"              # send も同じフラグを持つ
 ```
 
-## 共有ターミナル (exec) の使い方
+## 共有ターミナルの使い方
 
 ユーザーと一緒にターミナルで作業する場合に使う。
-
-### 前提
 
 1. まず共有ターミナルを開く:
    ```
    panecom open terminal
    ```
-2. その後 exec でコマンドを送る:
+2. コマンドを打ち込む:
    ```
-   panecom exec terminal "<command>"
+   panecom send terminal "kubectl get pods -A"
+   ```
+3. 結果を読む:
+   ```
+   panecom dump terminal
    ```
 
-### exec の動作
+**通常のコマンド実行は自分の環境（Bash ツール）で行う。** 共有ターミナルを使うのは、ユーザーに見せる必要がある、ユーザーの環境・認証情報で動かす必要がある、同じシェルの状態（cd / 環境変数）を使い続ける必要がある、のいずれかに当たる場合だけ。
 
-- コマンドを共有ターミナルの pane で実行する
-- **完了まで自動で待機**し、結果を stdout に返す（dump 不要）
-- 失敗時は stderr と非ゼロ exit code を返す
-- デフォルト 30 秒タイムアウト（`--timeout 60` で変更可能）
-- クォーテーションやエスケープは panecom が自動処理する
-- **同時に1つしか実行できない**（実行中に別の exec を開始するとエラー）
-- 実行中の進捗は `cat .panecom/exec/current/stdout` で確認可能
+### 結果の読み取り
 
-### exec の例
+`send` は打ち込むだけなので、**完了を待つ仕組みは無い**。`dump` した時点の画面が返る。
 
-```
-panecom exec terminal "kubectl get pods -A"
-panecom exec terminal "docker ps"
-panecom exec terminal "cat /etc/os-release"
-panecom exec --timeout 120 terminal "make build"
-```
+- コマンドが終わっているかは `dump` の内容（プロンプトが戻っているか）で判断する
+- すぐ終わらないコマンドは、少し待ってから `dump` し直す
+- 画面に収まらない出力は取りこぼす。全量が必要なら、コマンド側でファイルにリダイレクトしてから読む:
+  ```
+  panecom send terminal "make build > /tmp/build.log 2>&1; echo done"
+  panecom dump terminal          # done が出ていれば完了
+  ```
+- `dump` はあくまで画面の写しなので、長い行は pane 幅で折り返される
 
-### exec / tell / send の違い
+### tell / send / dump の違い
 
-| | exec | tell | send |
+| | tell | send | dump |
 |---|---|---|---|
-| 対象 | シェルが動いている pane | AI エージェントの pane | 任意の pane |
-| 動作 | コマンド実行 → 結果を返す | 送信者名を付けてメッセージ送信 | 文字列をそのまま打ち込む |
-| 待機 | 完了まで待つ | 配信確認のみ待つ（数秒） | 配信確認のみ待つ（数秒） |
-| 結果 | stdout に出力される | なし（exit code で配信可否を判定） | なし（exit code で配信可否を判定） |
+| 対象 | AI エージェントの pane | 任意の pane | 任意の pane |
+| 動作 | 送信者名を付けてメッセージ送信 | 文字列をそのまま打ち込む | 画面を読み取る |
+| 結果 | なし（exit code で配信可否を判定） | なし（exit code で配信可否を判定） | 画面の内容が stdout に出る |
 
 ## その他のコマンド
 
@@ -251,8 +248,8 @@ panecom skill uninstall         # 記録した配布先を選んで解除
 - **通常のコマンド実行は自分の環境で行う（Bash ツール等）**
 - pane ID を推測しない
 - マルチプレクサの list-panes コマンドから通信相手を推測しない
-- exec の結果は stdout で返るので、別途 dump する必要はない
-- **エージェント宛は `tell`、pane をそのまま操作するなら `send`、シェルでコマンドを実行して結果が欲しいなら `exec`**。エージェント宛に `send` を使わない（送信者が付かず相手が返信先を判断できない）
+- **エージェント宛は `tell`、pane をそのまま操作するなら `send`**。エージェント宛に `send` を使わない（送信者が付かず相手が返信先を判断できない）
+- `send` の結果が必要なら `dump` で読む。完了を待つ仕組みは無いので、終わったかどうかは画面で判断する
 - **panecom で受けた依頼は panecom で返す**。自分の pane に結果を出力して終わりにしない。返信を送るまでそのタスクは完了していない
 - **返信先は届いたメッセージの `[panecom:from=<role>]` を見る**。`tell` が自動で付けるので、本文で名乗る必要はない
 - **tell / send が非ゼロで終了したら成功扱いにしない**。stderr の画面を読んで原因を判断し、必要ならユーザーに報告する

@@ -15,21 +15,13 @@ gofmt -w main.go main_test.go
 `.panecom/` 配下の構造:
 
 - `sessions/` — role ↔ pane のマッピング（**消さない**）
-- `exec/` — exec のランタイムデータ（テスト後に消してよい）
-- `exec.lock/` — exec のロックディレクトリ（テスト後に消してよい）
 - プロファイル設定はプロジェクトルートの `.panecom.yaml`（旧 `.panecom/config.yaml` も読み取り可能）
 
-### テスト時の state クリア
+v3.0.0 で `exec` コマンドを削除したため、`exec/` と `exec.lock/` は作られなくなった。古い環境に残っていれば消してよい。
 
-exec のテスト後にクリアする場合は **exec 関連だけ** を消すこと。sessions を消すと全 role の登録が失われる。
+### state を消すときの注意
 
-```bash
-# 正しい
-rm -rf .panecom/exec .panecom/exec.lock*
-
-# やってはいけない
-rm -rf .panecom/sessions  # role 登録が全部消える
-```
+`.panecom/sessions/` を消すと**全 role の登録が失われる**。消さないこと。stale な登録を整理したい場合は `panecom cleanup` を使う。
 
 ## ブランチ運用
 
