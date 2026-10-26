@@ -56,8 +56,8 @@ func TestTmuxListPanesCommand(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-501/default,12345,0")
 	r := newFakeRunner()
 	r.Stub([]byte("my-session\n"), "tmux", "display-message", "-p", "#{session_name}")
-	r.Stub([]byte("%0\t@0\tshell\tagent\t/work/repo\tcodex\n%1\t@0\tshell\tother\t/work/repo\tzsh\n%2\t@1\teditor\teditor\t/work/repo\tvim\n"),
-		"tmux", "list-panes", "-s", "-t", "my-session", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}")
+	r.Stub([]byte("%0\t@0\tshell\tagent\t/work/repo\tcodex\t0\t0\t40\t24\n%1\t@0\tshell\tother\t/work/repo\tzsh\t41\t0\t39\t24\n%2\t@1\teditor\teditor\t/work/repo\tvim\t0\t0\t80\t24\n"),
+		"tmux", "list-panes", "-s", "-t", "my-session", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}")
 
 	tm := &TmuxMux{runner: r}
 	panes, err := tm.ListPanes("my-session")
@@ -72,6 +72,9 @@ func TestTmuxListPanesCommand(t *testing.T) {
 	}
 	if panes[0].Title != "agent" || panes[0].Cwd != "/work/repo" || panes[0].Command != "codex" {
 		t.Errorf("missing pane metadata: %+v", panes[0])
+	}
+	if panes[0].X != 0 || panes[0].Y != 0 || panes[0].Width != 40 || panes[0].Height != 24 {
+		t.Errorf("missing pane geometry: %+v", panes[0])
 	}
 	if panes[2].TabID != "@1" {
 		t.Errorf("pane 2 should be in window @1, got %s", panes[2].TabID)
@@ -90,8 +93,8 @@ func TestTmuxListPanesSessionScope(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-501/default,12345,0")
 	r := newFakeRunner()
 	r.Stub([]byte("my-session\n"), "tmux", "display-message", "-p", "#{session_name}")
-	r.Stub([]byte("%5\t@2\twork\tagent\t/work/repo\tcodex\n"),
-		"tmux", "list-panes", "-s", "-t", "my-session", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}")
+	r.Stub([]byte("%5\t@2\twork\tagent\t/work/repo\tcodex\t0\t0\t80\t24\n"),
+		"tmux", "list-panes", "-s", "-t", "my-session", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}")
 
 	tm := &TmuxMux{runner: r}
 	exists, err := tm.PaneExists("my-session", "%5")
@@ -103,8 +106,8 @@ func TestTmuxListPanesSessionScope(t *testing.T) {
 	}
 
 	r.calls = nil
-	r.Stub([]byte("%5\t@2\twork\tagent\t/work/repo\tcodex\n"),
-		"tmux", "list-panes", "-s", "-t", "my-session", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}")
+	r.Stub([]byte("%5\t@2\twork\tagent\t/work/repo\tcodex\t0\t0\t80\t24\n"),
+		"tmux", "list-panes", "-s", "-t", "my-session", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}")
 	exists, err = tm.PaneExists("my-session", "%99")
 	if err != nil {
 		t.Fatal(err)

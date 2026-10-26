@@ -13,6 +13,10 @@ type Pane struct {
 	Title   string
 	Cwd     string
 	Command string
+	X       int
+	Y       int
+	Width   int
+	Height  int
 }
 
 type Multiplexer interface {

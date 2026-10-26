@@ -39,6 +39,10 @@ type zellijRawPane struct {
 	Title    string `json:"title"`
 	Cwd      string `json:"pane_cwd"`
 	Command  string `json:"pane_command"`
+	X        int    `json:"pane_x"`
+	Y        int    `json:"pane_y"`
+	Width    int    `json:"pane_columns"`
+	Height   int    `json:"pane_rows"`
 }
 
 func (z *ZellijMux) ListPanes(_ string) ([]Pane, error) {
@@ -60,6 +64,10 @@ func (z *ZellijMux) ListPanes(_ string) ([]Pane, error) {
 				Title:   p.Title,
 				Cwd:     p.Cwd,
 				Command: p.Command,
+				X:       p.X,
+				Y:       p.Y,
+				Width:   p.Width,
+				Height:  p.Height,
 			})
 		}
 	}

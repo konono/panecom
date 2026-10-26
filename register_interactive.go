@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"unicode"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
+
+const escapeSequenceTimeoutMS = 200
 
 // registerSelectedPane registers an existing pane using that pane's working
 // directory. The command runs in the caller's pane; nothing is typed into the
@@ -114,7 +117,7 @@ func pickPaneTTY(tty *os.File, panes []Pane, currentID string) (Pane, bool, erro
 }
 
 // pickPane contains the interaction logic independently of terminal raw mode.
-// Up/down (or j/k) changes the highlighted pane, Enter confirms, and Esc/q exits.
+// Arrows move across the pane layout, Enter confirms, and Esc/q exits.
 func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width, height int, preview func(Pane) (string, error), highlight func(Pane) error) (Pane, bool, error) {
 	selected := 0
 	for i, p := range panes {
@@ -157,13 +160,19 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 			return panes[selected], true, nil
 		case 'q', 3:
 			return Pane{}, false, nil
-		case 'j', '\t':
-			selected = (selected + 1) % len(panes)
+		case '\t':
+			selected = cycleTab(panes, selected, 1)
+		case 'j':
+			selected = spatialNeighbor(panes, selected, 'D')
 		case 'k':
-			selected = (selected + len(panes) - 1) % len(panes)
+			selected = spatialNeighbor(panes, selected, 'U')
+		case 'h':
+			selected = spatialNeighbor(panes, selected, 'L')
+		case 'l':
+			selected = spatialNeighbor(panes, selected, 'R')
 		case 27:
 			// A lone Esc cancels; arrow keys arrive as Esc [ A/B/C/D.
-			if !inputReady(in, 80) {
+			if !inputReady(in, escapeSequenceTimeoutMS) {
 				return Pane{}, false, nil
 			}
 			prefix, err := readByte()
@@ -176,21 +185,35 @@ func pickPane(panes []Pane, currentID string, in io.Reader, out io.Writer, width
 			if prefix != '[' && prefix != 'O' {
 				continue
 			}
-			if !inputReady(in, 80) {
-				return Pane{}, false, nil
-			}
-			direction, err := readByte()
-			if err != nil {
-				if err == io.EOF {
+			// CSI may contain modifiers such as Esc [ 1 ; 2 B.
+			for i := 0; i < 16; i++ {
+				if !inputReady(in, escapeSequenceTimeoutMS) {
 					return Pane{}, false, nil
 				}
-				return Pane{}, false, err
-			}
-			switch direction {
-			case 'A', 'D':
-				selected = (selected + len(panes) - 1) % len(panes)
-			case 'B', 'C':
-				selected = (selected + 1) % len(panes)
+				code, err := readByte()
+				if err != nil {
+					if err == io.EOF {
+						return Pane{}, false, nil
+					}
+					return Pane{}, false, err
+				}
+				switch code {
+				case 'A':
+					selected = spatialNeighbor(panes, selected, 'U')
+				case 'B':
+					selected = spatialNeighbor(panes, selected, 'D')
+				case 'C':
+					selected = spatialNeighbor(panes, selected, 'R')
+				case 'D':
+					selected = spatialNeighbor(panes, selected, 'L')
+				case 'Z':
+					selected = cycleTab(panes, selected, -1)
+				default:
+					if code >= '0' && code <= '9' || code == ';' {
+						continue
+					}
+				}
+				break
 			}
 		}
 	}
@@ -211,26 +234,47 @@ func inputReady(in io.Reader, timeoutMS int) bool {
 func renderPanePicker(panes []Pane, selected int, preview string, width, height int) string {
 	var b strings.Builder
 	b.WriteString("\x1b[H\x1b[2J")
-	b.WriteString("Select a pane  ↑/↓ or j/k: move  Enter: select  Esc/q: cancel\r\n\r\n")
+	b.WriteString("Select a pane  arrows/hjkl: move  Tab: next tab  Enter: select  Esc/q: cancel\r\n")
+	b.WriteString("Tab/window: " + panes[selected].TabName + "  (" + panes[selected].TabID + ")\r\n\r\n")
+	var shown []int
+	for i, p := range panes {
+		if p.TabID == panes[selected].TabID {
+			shown = append(shown, i)
+		}
+	}
+	sort.SliceStable(shown, func(i, j int) bool {
+		a, b := panes[shown[i]], panes[shown[j]]
+		if a.Y != b.Y {
+			return a.Y < b.Y
+		}
+		return a.X < b.X
+	})
+	selectedInTab := 0
+	for i, index := range shown {
+		if index == selected {
+			selectedInTab = i
+			break
+		}
+	}
 	// Reserve room for the selected pane's preview on a small terminal.
 	visible := height / 2
 	if visible < 3 {
 		visible = 3
 	}
-	start := selected - visible/2
+	start := selectedInTab - visible/2
 	if start < 0 {
 		start = 0
 	}
-	if start+visible > len(panes) {
-		start = len(panes) - visible
+	if start+visible > len(shown) {
+		start = len(shown) - visible
 		if start < 0 {
 			start = 0
 		}
 	}
-	for i := start; i < len(panes) && i < start+visible; i++ {
-		p := panes[i]
+	for i := start; i < len(shown) && i < start+visible; i++ {
+		p := panes[shown[i]]
 		marker := "  "
-		if i == selected {
+		if shown[i] == selected {
 			marker = "> "
 		}
 		name := p.Title

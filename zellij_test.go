@@ -97,7 +97,7 @@ func TestZellijCurrentPaneID(t *testing.T) {
 
 func TestZellijListPanesCommand(t *testing.T) {
 	r := newFakeRunner()
-	r.Stub([]byte(`[{"id":1,"is_plugin":false,"tab_id":0,"tab_name":"Tab #1","title":"agent","pane_cwd":"/work/repo","pane_command":"codex"},{"id":2,"is_plugin":true,"tab_id":0,"tab_name":"Tab #1"}]`),
+	r.Stub([]byte(`[{"id":1,"is_plugin":false,"tab_id":0,"tab_name":"Tab #1","title":"agent","pane_cwd":"/work/repo","pane_command":"codex","pane_x":10,"pane_y":2,"pane_columns":40,"pane_rows":20},{"id":2,"is_plugin":true,"tab_id":0,"tab_name":"Tab #1"}]`),
 		"zellij", "action", "list-panes", "--json", "--all")
 
 	z := &ZellijMux{runner: r}
@@ -116,6 +116,9 @@ func TestZellijListPanesCommand(t *testing.T) {
 	}
 	if panes[0].Title != "agent" || panes[0].Cwd != "/work/repo" || panes[0].Command != "codex" {
 		t.Errorf("missing pane metadata: %+v", panes[0])
+	}
+	if panes[0].X != 10 || panes[0].Y != 2 || panes[0].Width != 40 || panes[0].Height != 20 {
+		t.Errorf("missing pane geometry: %+v", panes[0])
 	}
 
 	call := r.findCall("zellij", "list-panes")

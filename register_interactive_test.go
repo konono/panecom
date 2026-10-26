@@ -40,6 +40,41 @@ func TestPickPaneSelectsNextAndCanCancel(t *testing.T) {
 	}
 }
 
+func TestSpatialNavigationUsesLayoutNotListOrder(t *testing.T) {
+	// Deliberately ordered bottom-right, top-left, bottom-left, top-right.
+	panes := []Pane{
+		{ID: "br", TabID: "1", X: 51, Y: 11, Width: 49, Height: 9},
+		{ID: "tl", TabID: "1", X: 0, Y: 0, Width: 50, Height: 10},
+		{ID: "bl", TabID: "1", X: 0, Y: 11, Width: 50, Height: 9},
+		{ID: "tr", TabID: "1", X: 51, Y: 0, Width: 49, Height: 10},
+		{ID: "other-tab", TabID: "2", X: 0, Y: 0, Width: 100, Height: 20},
+	}
+	if got := panes[spatialNeighbor(panes, 2, 'U')].ID; got != "tl" {
+		t.Errorf("up from bottom-left = %s", got)
+	}
+	if got := panes[spatialNeighbor(panes, 2, 'R')].ID; got != "br" {
+		t.Errorf("right from bottom-left = %s", got)
+	}
+	if got := panes[spatialNeighbor(panes, 2, 'D')].ID; got != "bl" {
+		t.Errorf("down at edge wrapped to %s", got)
+	}
+	if got := panes[cycleTab(panes, 2, 1)].ID; got != "other-tab" {
+		t.Errorf("Tab selected %s", got)
+	}
+	var out bytes.Buffer
+	selected, ok, err := pickPane(panes, "bl", strings.NewReader("\x1b[1;2A\x1b[C\r"), &out, 100, 24, nil, nil)
+	if err != nil || !ok || selected.ID != "tr" {
+		t.Fatalf("modified Up then Right: selected=%+v ok=%v err=%v", selected, ok, err)
+	}
+	if strings.Contains(out.String(), "other-tab") {
+		t.Error("other tab pane appeared in the current tab list")
+	}
+	first := renderPanePicker(panes, 2, "", 100, 24)
+	if strings.Index(first, "tl") > strings.Index(first, "br") {
+		t.Error("pane list is not ordered by screen position")
+	}
+}
+
 func TestRegisterSelectedPaneUsesTargetsProjectAndStore(t *testing.T) {
 	a, b, f := twoProjects(t)
 	// The selected pane has never run panecom. It is in a subdirectory of B.
