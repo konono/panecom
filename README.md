@@ -356,9 +356,10 @@ $ panecom link mcp ../rh_sc_mcp
 mcp -> /path/to/rh_sc_mcp
   developer    terminal_12
   reviewer     terminal_13
+  terminal     terminal_14
 
-$ panecom send mcp/reviewer "schema 確認お願いします"
-$ panecom send mcp/developer "git status"
+$ panecom tell mcp/reviewer "schema 確認お願いします"   # エージェント宛は tell
+$ panecom send mcp/terminal "git status"                # シェル pane 宛は send
 ```
 
 `link` は相手の role をその場で検証して一覧表示します。相手がまだ register していなければ失敗するので、送信時まで気づかないということがありません。相手の起動前に張っておきたい場合は `-f` を使います。
@@ -475,9 +476,13 @@ profiles:
 
 ```
 .panecom/sessions/
+# v3.0.0 より前の exec の残骸。新規には作られないが、
+# 既存データにはコマンドとその出力が含まれる
+.panecom/exec/
+.panecom/exec.lock
 ```
 
-v3.0.0 より前のバージョンは `.panecom/exec/` と `.panecom/exec.lock` も作成していました。`exec` コマンドの削除に伴い使われなくなったので、残っていれば削除して構いません。
+v3.0.0 より前のバージョンは `.panecom/exec/` と `.panecom/exec.lock` も作成していました。`exec` コマンドの削除に伴い新規には作られませんが、**既存のデータは残ります**。実行したコマンドと stdout / stderr が入っているため、ignore は外さず、不要なら削除してください。
 
 ## Safety
 
