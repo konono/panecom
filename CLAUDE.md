@@ -1,6 +1,8 @@
-# panecom 開発ガイド
+# panecom development guide
 
-## ビルドとテスト
+**English** | [日本語](CLAUDE.ja.md)
+
+## Build and test
 
 ```bash
 go build -o bin/panecom .
@@ -10,37 +12,50 @@ go test ./... -race
 gofmt -w main.go main_test.go
 ```
 
-## panecom の状態ディレクトリ
+## The panecom state directory
 
-`.panecom/` 配下の構造:
+Layout under `.panecom/`:
 
-- `sessions/` — role ↔ pane のマッピング（**消さない**）
-- プロファイル設定はプロジェクトルートの `.panecom.yaml`（旧 `.panecom/config.yaml` も読み取り可能）
+- `sessions/` — the role ↔ pane mapping (**do not delete**)
+- Profile configuration lives in `.panecom.yaml` at the project root (the legacy `.panecom/config.yaml` is still read)
 
-v3.0.0 で `exec` コマンドを削除したため、`exec/` と `exec.lock/` は作られなくなった。古い環境に残っていれば消してよい。
+v3.0.0 removed the `exec` command, so `exec/` and `exec.lock/` are no longer created. Delete them if an older environment still has them.
 
-### state を消すときの注意
+### Before you delete state
 
-`.panecom/sessions/` を消すと**全 role の登録が失われる**。消さないこと。stale な登録を整理したい場合は `panecom cleanup` を使う。
+Deleting `.panecom/sessions/` **loses every role registration**. Don't. To tidy up stale registrations, use `panecom cleanup`.
 
-## skill の変更
+## Changing the skill
 
-`.claude/skills/panecom.md` を変更したら、`AGENTS.md` を再生成する:
+After editing `.claude/skills/panecom.md`, regenerate `AGENTS.md`:
 
 ```bash
 go run . skill sync AGENTS.md
 ```
 
-`AGENTS.md` は skill のインストール済みコピーで、自動では追従しない。CI の `skill-sync` ジョブが `skill sync --check AGENTS.md` を実行するため、忘れると fail する。
+`AGENTS.md` is an installed copy of the skill and does not follow the source on its own. CI's `skill-sync` job runs `skill sync --check AGENTS.md`, so forgetting this fails the build.
 
-## ブランチ運用
+The skill is written in English, but it must keep working the same way for Japanese users: trigger phrases are listed in both languages, and the skill tells the agent to reply in the language the user is speaking. Preserve both properties when you edit it.
 
-- main に直接 push しない
-- ブランチで作業して PR 経由でマージする
-- release-please が自動で release PR を作成する
+## Documentation
 
-## macOS / Linux 混在環境
+English is the source of truth; the Japanese files are mirrors.
 
-コンテナ (Linux) と macOS で同じ Zellij セッションを共有する場合:
-- `go install .` で PATH にバイナリを入れる（両方の OS で）
-- `panecom` コマンドは PATH にある前提で動作する
+| English | Japanese |
+|---|---|
+| `README.md` | `README.ja.md` |
+| `CLAUDE.md` | `CLAUDE.ja.md` |
+
+When you change one side, update the other in the same PR. Nothing checks this automatically.
+
+## Branch policy
+
+- Never push directly to main
+- Work on a branch and merge through a PR
+- release-please opens the release PR automatically
+
+## Mixed macOS / Linux environments
+
+When a container (Linux) and macOS share the same Zellij session:
+- Install the binary onto PATH with `go install .` (on both OSes)
+- The `panecom` command assumes it is on PATH
