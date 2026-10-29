@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.0.0](https://github.com/konono/panecom/compare/v2.1.0...v3.0.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* the exec command is gone. Use send to type a command into a pane and dump to read the result. .panecom/exec and .panecom/exec.lock are no longer created and can be deleted.
+
+### Features
+
+* remove exec ([00c0fee](https://github.com/konono/panecom/commit/00c0feeacd7f3e33ea4f896118bedd55482ee067))
+* **skill:** add skill sync to follow the skill in tracked files ([00755a8](https://github.com/konono/panecom/commit/00755a88f3e13ab4e91f83ede388321ac81fc626))
+* **skill:** add skill sync to follow the skill in tracked files ([6ff0f20](https://github.com/konono/panecom/commit/6ff0f20ee308a540021132feaf2b0ade356294dc)), closes [#27](https://github.com/konono/panecom/issues/27)
+* **skill:** write the skill in English, keeping Japanese behaviour ([da9bde2](https://github.com/konono/panecom/commit/da9bde2cef23180c38326962f9ceeea96e403e3e))
+
+
+### Bug Fixes
+
+* keep ignoring old exec data and fix the replacement examples ([8ee16c4](https://github.com/konono/panecom/commit/8ee16c4a1e7d674b6f9e6200b9aaa2c88e8fc4e5))
+* recognise a failing command as finished ([49daa0b](https://github.com/konono/panecom/commit/49daa0b4915bedbc3d8ccd0101f372348e95d991))
+* stop sync from damaging files it cannot maintain ([8c8bd99](https://github.com/konono/panecom/commit/8c8bd99c72ffa198bbb9bcb3c236f6d99cb354fd))
+
 ## [2.1.0](https://github.com/konono/panecom/compare/v2.0.1...v2.1.0) (2026-10-26)
 
 
