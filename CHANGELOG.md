@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.0.1](https://github.com/konono/panecom/compare/v3.0.0...v3.0.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **skill:** install the Claude skill as panecom/SKILL.md and update stale installs ([0b3d1c6](https://github.com/konono/panecom/commit/0b3d1c64a42fb5efb22abbd96e177563cee2dd04))
+* **skill:** install the Claude skill as panecom/SKILL.md and update stale installs ([36a7ea2](https://github.com/konono/panecom/commit/36a7ea2325870f1252785591befb63aeac080a3d))
+
 ## [3.0.0](https://github.com/konono/panecom/compare/v2.1.0...v3.0.0) (2026-10-29)
 
 
