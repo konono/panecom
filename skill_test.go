@@ -335,7 +335,7 @@ func TestAllSkillTargetsDeduplicatesSymlinkedHome(t *testing.T) {
 	if err != nil || len(targets) != 3 {
 		t.Fatalf("symlinked home produced duplicate targets: %+v err=%v", targets, err)
 	}
-	if targets[0].Path != filepath.Join(alias, ".claude", "skills", "panecom.md") {
+	if targets[0].Path != filepath.Join(alias, ".claude", "skills", "panecom", "SKILL.md") {
 		t.Fatalf("user target path changed: %s", targets[0].Path)
 	}
 	if err := installSkills(alias, targets[:1]); err != nil {
@@ -596,7 +596,7 @@ func TestSkillSyncCheckRefusesAMissingFile(t *testing.T) {
 
 // A Claude skill file is the skill in full, not a block. Running the block
 // logic over it would append a second copy in the other format -- and doing
-// that to .claude/skills/panecom.md, the embedded source, would carry the
+// that to .claude/skills/panecom/SKILL.md, the embedded source, would carry the
 // growth into the next build.
 func TestSkillSyncRefusesFilesItCannotMaintain(t *testing.T) {
 	dir := t.TempDir()

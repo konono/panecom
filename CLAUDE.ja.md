@@ -27,7 +27,7 @@ v3.0.0 で `exec` コマンドを削除したため、`exec/` と `exec.lock/` �
 
 ## skill の変更
 
-`.claude/skills/panecom.md` を変更したら、`AGENTS.md` を再生成する:
+`.claude/skills/panecom/SKILL.md` を変更したら、`AGENTS.md` を再生成する:
 
 ```bash
 go run . skill sync AGENTS.md

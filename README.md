@@ -201,7 +201,8 @@ Note that exit 0 confirms "the screen moved", not that the recipient understood 
 | `share [--full] <role>` | share your own screen with someone |
 | `profile [-f] <name>` | build an environment from a profile |
 | `skill install` | pick agents and scopes, then install the skill |
-| `skill list` | list the skill installs panecom has recorded |
+| `skill list` | list the skill installs panecom has recorded, and whether each is up to date |
+| `skill update [--check]` | update recorded installs that are outdated or in the old layout (edited ones are left alone; `--check` writes nothing and just reports) |
 | `skill uninstall` | pick recorded installs and remove them |
 | `skill sync [--check] <file>...` | regenerate the panecom skill block in the given files (only files that carry the markers; `--check` writes nothing and just reports whether they differ) |
 | `update` | self-update to the latest release |
@@ -520,20 +521,23 @@ panecom skill sync --check AGENTS.md   # exit non-zero if out of date (for CI)
 
 Anything outside the markers (`<!-- panecom-skill:start -->` … `<!-- panecom-skill:end -->`) is left alone.
 
-**Only files that carry the markers are eligible.** A file without them is an error (use `skill install` to add one). Claude skill files in particular are a different format — the whole file is the skill rather than a block — so they are excluded: passing one to `sync` would append a block in the wrong format, and that is rejected explicitly. The embedding source `.claude/skills/panecom.md` is excluded for the same reason.
+**Only files that carry the markers are eligible.** A file without them is an error (use `skill install` to add one). Claude skill files in particular are a different format — the whole file is the skill rather than a block — so they are excluded: passing one to `sync` would append a block in the wrong format, and that is rejected explicitly. The embedding source `.claude/skills/panecom/SKILL.md` is excluded for the same reason.
 
 When you `sync` a file managed by `skill install`, the manifest record is updated too. A stale record would make `skill uninstall` / re-install refuse with "changed since installation".
 
-In this repository the CI `skill-sync` job runs `--check`, so changing `.claude/skills/panecom.md` and forgetting to regenerate `AGENTS.md` fails the build.
+In this repository the CI `skill-sync` job runs `--check`, so changing `.claude/skills/panecom/SKILL.md` and forgetting to regenerate `AGENTS.md` fails the build.
 
 Your chosen install targets are recorded in `~/.config/panecom/skill-installs.json`. The commands below inspect and remove them. `list` also shows installs made by other means (an older script, say) as `untracked`, as far as the current user/project scope reveals them. Choosing an existing install with identical content adopts it as managed, and uninstalling leaves a file that was already there in place. An existing file with local edits has its pre-install content and permissions saved and restored. Existing Claude files are replaced wholesale at install time, and the selection screen says so. A symlink target is replaced by a regular file, and uninstall does not restore the symlink. If the target is already deleted, only the tracking record is removed. Uninstall aborts if the skill body was edited afterwards, as a safeguard.
 
 ```bash
 panecom skill list
+panecom skill update
 panecom skill uninstall
 ```
 
-Install uses the skill bundled into the running panecom binary. To get the newest one, update the binary first with `panecom update` or `go install .`, then re-run `panecom skill install`. Agents pick up the new instructions on their next session.
+Install uses the skill bundled into the running panecom binary, so an installed skill falls behind when the binary is updated. `skill list` compares each recorded install with the bundled skill and marks it `outdated`, `old layout` or `edited since installation`. `panecom skill update` rewrites the outdated and old-layout ones without asking which; installs you edited are skipped with a warning, never overwritten. `panecom update` checks this with the new binary once it is installed, and `register` / `tell` / `send` print a one-line reminder on stderr — at most once a day — while a recorded install is behind. Agents pick up the new instructions on their next session.
+
+Claude Code loads a skill from `<skills dir>/<name>/SKILL.md`. panecom 3.0.0 and earlier wrote `~/.claude/skills/panecom.md` instead, which Claude Code does not load. `skill update` (or `skill install`) moves a recorded install of that kind to `panecom/SKILL.md` and puts back what was at the old path before panecom wrote it — usually nothing. If you edited the old file it is left as it is and the move stops with an error; carry your edits over, delete it and run again. An old-layout copy panecom did not install (from an older `deploy-skill.sh`, say) shows up in `skill list` as `untracked`; panecom leaves it to you to delete.
 
 To regenerate this repository's `AGENTS.md`, run `scripts/deploy-skill.sh` from the source tree as before.
 
@@ -545,8 +549,8 @@ The install targets are:
 
 | Target | Path | How to update |
 |---|---|---|
-| Claude Code (user) | `~/.claude/skills/panecom.md` | `skill install` / script |
-| Claude Code (project) | `<project>/.claude/skills/panecom.md` | `skill install` |
+| Claude Code (user) | `~/.claude/skills/panecom/SKILL.md` | `skill install` / script |
+| Claude Code (project) | `<project>/.claude/skills/panecom/SKILL.md` | `skill install` |
 | Codex (project) | `<project>/AGENTS.md` | `skill install` / source-tree script |
 | Codex (user) | `~/.codex/instructions.md` | `skill install` / script |
 

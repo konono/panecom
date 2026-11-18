@@ -17,15 +17,29 @@ A pane-to-pane communication tool for terminal multiplexers (Zellij / tmux). You
 | Open a shared terminal | "make a shared terminal", "open a terminal", "create a new pane" | 「共有ターミナルを作って」「terminal 開いて」「新しい pane を作って」 |
 | Work together in the terminal | "let's work in the terminal together" | 「一緒にターミナルで作業しよう」 |
 | Name the tool | "do X with panecom" | 「panecom で〜して」 |
-| Address another role | "send it to the reviewer", "share it with the developer" | 「reviewer に送って」「developer に共有して」 |
+| Address another role | "send it to the reviewer", "share it with the developer", "have rev review it before you commit" | 「reviewer に送って」「developer に共有して」「commit 前に rev にレビューしてもらって」 |
 | Assign you a role | "you're the reviewer", "go ahead as developer" | 「あなたがレビュワーね」「developer として進めて」 |
 | Collaborate across projects | "talk it over with the reviewer in the other project" | 「別プロジェクトの reviewer と相談して」 |
 
 **Run ordinary commands in your own environment (the Bash tool and friends).** Going through panecom puts them outside your sandbox and permission controls.
 
+**Looking is fine; talking needs the user.** `panecom whoami` and `panecom list` only read panecom's registrations, so you may run them whenever you need to work out whether a name the user mentioned is a panecom role. `panecom tell` / `send` reach another pane, so use them only on the user's instruction.
+
+**When unsure what a command does or whether it exists, check `panecom --help`.** The installed panecom may be newer than this skill; `--help` is the authority on which commands and flags exist.
+
+## Finding who to talk to
+
+Role names are free-form. `developer` / `reviewer` are only examples; teams often register short names such as `dev`, `rev`, `qa` or `ops`. When the user asks you to hand something to a name you don't otherwise recognise ("have rev review it", 「rev にレビューしてもらって」), don't go looking through agent definitions, sessions or files — check panecom:
+
+1. `panecom whoami` — your own role and namespace. If it reports that this pane is not registered, `tell` will not work until you register; ask the user which role to take.
+2. `panecom list` — the roles registered in the same namespace. If the name the user used is there, that is who they mean. Use `panecom list <alias>` for a linked project.
+3. `panecom tell <role> "<message>"` — send the request to the role you found.
+
+If the name isn't in the list, tell the user and ask; never guess a role or a pane.
+
 ## Taking part as developer / reviewer
 
-When the user names you the reviewer ("reviewer", 「レビュワー」), run `panecom register reviewer` in your own pane. For developer ("developer", 「開発者」), run `panecom register developer`. On success, confirm the role and namespace with `panecom whoami`. On failure, tell the user why and do not treat yourself as registered. When the user wants to pick a pane themselves, that is `panecom register` with no arguments.
+The examples here use `developer` / `reviewer`; the same applies to whatever role names are registered (`dev` / `rev`, …). When the user names you the reviewer ("reviewer", 「レビュワー」), run `panecom register reviewer` in your own pane. For developer ("developer", 「開発者」), run `panecom register developer`. On success, confirm the role and namespace with `panecom whoami`. On failure, tell the user why and do not treat yourself as registered. When the user wants to pick a pane themselves, that is `panecom register` with no arguments.
 
 When `developer` and `reviewer` collaborate inside the same project, work like this by default:
 
@@ -238,6 +252,8 @@ panecom register <role>          # register your own pane under a role
 panecom register                 # pick a pane in the same tab (Tab completes the role)
 panecom whoami                   # your role, pane ID and the namespace recorded at registration
 panecom whoami --role            # the role only (for scripts)
+panecom list                     # roles registered in this namespace (who you can tell)
+panecom list <alias>             # roles in a linked project
 panecom tell <role> "<message>"  # message an agent (your role is attached)
 panecom send <role> "<text>"     # type a literal string into a pane
 panecom resolve <role>           # resolve role → pane ID
@@ -246,8 +262,10 @@ panecom profile [-f] <name>     # build an environment from a .panecom.yaml prof
 panecom link [-f] <alias> <path> # make another project's roles reachable
 panecom unlink <alias>          # remove a link
 panecom skill install           # pick agents and user/project scopes, then install the skill
-panecom skill list              # show the installs panecom has recorded
+panecom skill list              # show the recorded installs and whether each is up to date
+panecom skill update            # bring outdated installs up to date (edited ones are left alone)
 panecom skill uninstall         # pick recorded installs and remove them
+panecom --help                  # the authoritative list of commands and flags
 ```
 
 ## Rules
@@ -256,7 +274,9 @@ panecom skill uninstall         # pick recorded installs and remove them
 - **Never use panecom without an explicit instruction from the user.** Being assigned a role, and being asked to collaborate with someone in another project, both count as explicit instructions
 - **Run ordinary commands in your own environment (the Bash tool and friends)**
 - Never guess a pane ID
-- Never guess who to talk to from the multiplexer's list-panes output
+- Never guess who to talk to from the multiplexer's list-panes output. Find roles with `panecom list`
+- When you don't recognise a name the user wants you to work with, check `panecom list` before anything else
+- When unsure which command or flag to use, check `panecom --help`; it can be newer than this skill
 - **`tell` for agents, `send` when you want to drive the pane.** Never `send` to an agent (no sender is attached, so they can't work out where to reply)
 - If you need the result of a `send`, read it with `dump`. Nothing waits for completion, so judge from the screen
 - **A request received through panecom is answered through panecom.** Don't print the result in your own pane and call it done. The task isn't complete until the reply is sent

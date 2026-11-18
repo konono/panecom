@@ -27,7 +27,7 @@ Deleting `.panecom/sessions/` **loses every role registration**. Don't. To tidy 
 
 ## Changing the skill
 
-After editing `.claude/skills/panecom.md`, regenerate `AGENTS.md`:
+After editing `.claude/skills/panecom/SKILL.md`, regenerate `AGENTS.md`:
 
 ```bash
 go run . skill sync AGENTS.md
