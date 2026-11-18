@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SKILL_SOURCE="$PROJECT_ROOT/.claude/skills/panecom.md"
+SKILL_SOURCE="$PROJECT_ROOT/.claude/skills/panecom/SKILL.md"
 
 if [ ! -f "$SKILL_SOURCE" ]; then
   echo "error: skill source not found: $SKILL_SOURCE" >&2
@@ -18,10 +18,19 @@ skill_body() {
 deployed=()
 
 # ── Claude Code (global) ──
-claude_global="$HOME/.claude/skills/panecom.md"
+# Claude Code loads skills from <skills dir>/<name>/SKILL.md.
+claude_global="$HOME/.claude/skills/panecom/SKILL.md"
 mkdir -p "$(dirname "$claude_global")"
 cp "$SKILL_SOURCE" "$claude_global"
 deployed+=("Claude (global): $claude_global")
+
+# Older versions copied the skill to ~/.claude/skills/panecom.md, which
+# Claude Code does not load. Point it out rather than deleting a file this
+# script cannot tell apart from one the user edited.
+claude_legacy="$HOME/.claude/skills/panecom.md"
+if [ -f "$claude_legacy" ]; then
+  echo "note: $claude_legacy is an old-layout copy that Claude Code does not load; delete it" >&2
+fi
 
 # ── Claude Code (project) ──
 # Already exists at source, nothing to do

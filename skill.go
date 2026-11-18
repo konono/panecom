@@ -16,7 +16,7 @@ import (
 	"golang.org/x/term"
 )
 
-//go:embed .claude/skills/panecom.md
+//go:embed .claude/skills/panecom/SKILL.md
 var embeddedSkill string
 
 const (
@@ -129,7 +129,7 @@ func replaceSkillSection(existing, section string) (string, string, string, erro
 // Only files that already carry the markers are accepted. A Claude skill file
 // holds the skill as its whole content with frontmatter and has no markers, so
 // treating it like the rest would append a second copy in the other format --
-// and doing that to .claude/skills/panecom.md, which is the embedded source,
+// and doing that to .claude/skills/panecom/SKILL.md, which is the embedded source,
 // would feed the growth back into the next build.
 func cmdSkillSync(paths []string, check bool) error {
 	section, err := skillSection()
@@ -294,7 +294,7 @@ func skillTargets(home, project, agent, scope string) ([]skillInstall, error) {
 	}
 	var targets []skillInstall
 	if agent == "claude" || agent == "both" {
-		targets = append(targets, skillInstall{Agent: "claude", Scope: scope, Path: filepath.Join(base, ".claude", "skills", "panecom.md")})
+		targets = append(targets, skillInstall{Agent: "claude", Scope: scope, Path: claudeSkillPath(base)})
 	}
 	if agent == "codex" || agent == "both" {
 		path := filepath.Join(base, ".codex", "instructions.md")
@@ -369,6 +369,7 @@ func installSkills(home string, targets []skillInstall) error {
 	planned := make([]skillInstall, 0, len(targets))
 	contents := make([]string, 0, len(targets))
 	snapshots := make([]fileSnapshot, 0, len(targets))
+	var retirements []legacyRetirement
 	for _, target := range targets {
 		current, exists, err := readOptional(target.Path)
 		if err != nil {
@@ -399,6 +400,13 @@ func installSkills(home string, targets []skillInstall) error {
 			}
 		}
 		if target.Agent == "claude" {
+			retirement, err := planLegacyRetirement(manifest, target.Path)
+			if err != nil {
+				return err
+			}
+			if retirement != nil {
+				retirements = append(retirements, *retirement)
+			}
 			contents = append(contents, embeddedSkill)
 			target.Installed = contentHash(embeddedSkill)
 		} else {
@@ -434,6 +442,17 @@ func installSkills(home string, targets []skillInstall) error {
 			manifest.Installs[index] = target
 		} else {
 			manifest.Installs = append(manifest.Installs, target)
+		}
+	}
+	// Retire old-layout installs only once the new files are in place, so a
+	// failure part-way never leaves a user without any copy of the skill.
+	for _, retirement := range retirements {
+		if err := retirement.apply(); err != nil {
+			return rollbackError(fmt.Errorf("moving %s: %w", retirement.snapshot.path, err), snapshots)
+		}
+		snapshots = append(snapshots, retirement.snapshot)
+		if index := findInstall(manifest, retirement.snapshot.path); index >= 0 {
+			manifest.Installs = append(manifest.Installs[:index], manifest.Installs[index+1:]...)
 		}
 	}
 	if err := writeManifest(home, manifest); err != nil {
@@ -649,12 +668,12 @@ func skillPathKey(path string) string {
 func displaySkillPath(target skillInstall) string {
 	if target.Scope == "user" {
 		if target.Agent == "claude" {
-			return "~/.claude/skills/panecom.md"
+			return "~/.claude/skills/panecom/SKILL.md"
 		}
 		return "~/.codex/instructions.md"
 	}
 	if target.Agent == "claude" {
-		return "<project>/.claude/skills/panecom.md"
+		return "<project>/.claude/skills/panecom/SKILL.md"
 	}
 	return "<project>/AGENTS.md"
 }
@@ -834,8 +853,25 @@ func cmdSkillInstall() error {
 	}
 	for _, target := range targets {
 		fmt.Println("Installed " + target.Path)
+		if target.Agent == "claude" {
+			warnUntrackedLegacy(home, target.Path)
+		}
 	}
 	return nil
+}
+
+// warnUntrackedLegacy points out an old-layout copy panecom did not install
+// (a script deployment, say). It is not ours to delete, but leaving it
+// unmentioned would leave the user with two copies that disagree.
+func warnUntrackedLegacy(home, path string) {
+	legacy := legacyClaudeSkillPath(path)
+	manifest, err := readManifest(home)
+	if err != nil || findInstall(manifest, legacy) >= 0 {
+		return
+	}
+	if content, exists, err := readOptional(legacy); err == nil && exists && isPanecomClaudeSkill(content) {
+		fmt.Fprintf(os.Stderr, "panecom: %s is an old-layout copy that Claude Code does not load and panecom did not install; delete it\n", legacy)
+	}
 }
 
 func cmdSkillList() error {
@@ -852,14 +888,22 @@ func cmdSkillList() error {
 	}
 	sort.Slice(manifest.Installs, func(i, j int) bool { return manifest.Installs[i].Path < manifest.Installs[j].Path })
 	for _, install := range manifest.Installs {
-		fmt.Printf("managed: %s (%s): %s\n", install.Agent, install.Scope, install.Path)
+		state, err := installState(install)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("managed: %s (%s): %s%s\n", install.Agent, install.Scope, install.Path, stateNote(state))
 	}
 	untracked, err := untrackedSkills(home, namespaceAnchor(), manifest)
 	if err != nil {
 		return err
 	}
 	for _, target := range untracked {
-		fmt.Printf("untracked: %s (%s): %s\n", target.Agent, target.Scope, target.Path)
+		note := ""
+		if isLegacyInstall(target) {
+			note = " [old layout, not loaded by Claude Code: delete it and run 'panecom skill install']"
+		}
+		fmt.Printf("untracked: %s (%s): %s%s\n", target.Agent, target.Scope, target.Path, note)
 	}
 	return nil
 }
@@ -876,6 +920,10 @@ func untrackedSkills(home, project string, manifest skillManifest) ([]skillInsta
 		if err != nil {
 			return nil, err
 		}
+		if targets[0].Agent == "claude" {
+			// Look for old-layout copies too; Claude Code ignores them.
+			targets = append(targets, skillInstall{Agent: "claude", Scope: scope, Path: legacyClaudeSkillPath(targets[0].Path)})
+		}
 		for _, target := range targets {
 			key := skillPathKey(target.Path)
 			if seen[key] || tracked[key] {
@@ -890,7 +938,7 @@ func untrackedSkills(home, project string, manifest skillManifest) ([]skillInsta
 				continue
 			}
 			if target.Agent == "claude" {
-				if strings.HasPrefix(content, "---\nname: panecom\n") {
+				if isPanecomClaudeSkill(content) {
 					found = append(found, target)
 				}
 			} else if strings.Contains(content, skillStart) {

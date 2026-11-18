@@ -201,7 +201,8 @@ $ panecom tell reviewer "レビューをお願いします"
 | `share [--full] <role>` | 自分の画面を相手に共有 |
 | `profile [-f] <name>` | プロファイルから環境を構築 |
 | `skill install` | agent と scope を選んで skill を適用 |
-| `skill list` | panecom が配布を記録した skill の一覧 |
+| `skill list` | panecom が配布を記録した skill の一覧と、それぞれが最新かどうか |
+| `skill update [--check]` | 記録済みの配布先のうち、古いもの・旧配置のものを更新（編集済みのものは触らない。`--check` は書き込まず報告だけ） |
 | `skill uninstall` | 記録済みの配布先を選んで解除 |
 | `skill sync [--check] <file>...` | 指定ファイルの panecom skill ブロックを再生成（マーカーを持つファイルのみ。`--check` は書き込まず差分の有無だけ報告） |
 | `update` | 最新版に自己更新 |
@@ -520,20 +521,23 @@ panecom skill sync --check AGENTS.md   # ずれていれば非ゼロ終了（CI 
 
 マーカー（`<!-- panecom-skill:start -->` 〜 `<!-- panecom-skill:end -->`）の外側は書き換えません。
 
-**対象はマーカーを持つファイルだけです。** マーカーの無いファイルはエラーになります（新規追加は `skill install`）。特に Claude 向けの skill ファイルは、ブロックではなく**ファイル全体が skill 本体**という別形式なので対象外です。これを `sync` に渡すと別形式のブロックが追記されてしまうため、明示的に拒否します。埋め込み元の `.claude/skills/panecom.md` 自身も同じ理由で対象外です。
+**対象はマーカーを持つファイルだけです。** マーカーの無いファイルはエラーになります（新規追加は `skill install`）。特に Claude 向けの skill ファイルは、ブロックではなく**ファイル全体が skill 本体**という別形式なので対象外です。これを `sync` に渡すと別形式のブロックが追記されてしまうため、明示的に拒否します。埋め込み元の `.claude/skills/panecom/SKILL.md` 自身も同じ理由で対象外です。
 
 `skill install` で管理されているファイルを `sync` した場合、マニフェストの記録も更新します。記録が古いままだと `skill uninstall` / 再 install が「changed since installation」で拒否されるためです。
 
-このリポジトリでは CI の `skill-sync` ジョブが `--check` を実行し、`.claude/skills/panecom.md` を変更して `AGENTS.md` を再生成し忘れると fail します。
+このリポジトリでは CI の `skill-sync` ジョブが `--check` を実行し、`.claude/skills/panecom/SKILL.md` を変更して `AGENTS.md` を再生成し忘れると fail します。
 
 選択した配布先は `~/.config/panecom/skill-installs.json` に記録されます。次のコマンドで確認・解除できます。`list` は従来のスクリプトなどで入れた配布先も、現在の user/project で見つかる範囲は `untracked` と表示します。同じ内容の既存配布を選んで install すると管理対象として引き継ぎ、uninstall 時は元からあったファイルを残します。独自に編集された既存ファイルは install 前の内容と権限を保存して復元します。Claude の既存ファイルは install 時に全文を置き換えるため、選択画面にその旨を表示します。配布先が symlink の場合は通常ファイルに置き換わり、uninstall でも symlink は復元されません。配布先がすでに削除されている場合は追跡記録だけを解除します。uninstall は後から skill 本体が編集されていた場合、保護のため中止します。
 
 ```bash
 panecom skill list
+panecom skill update
 panecom skill uninstall
 ```
 
-install は実行中の panecom バイナリに同梱された skill を使います。最新版にしたいときは、先に `panecom update` または `go install .` でバイナリを更新し、`panecom skill install` を再実行してください。エージェントが新しい指示を読むには、新しいセッションを開始してください。
+install は実行中の panecom バイナリに同梱された skill を使うため、バイナリを更新すると配布済みの skill は古くなります。`skill list` は記録済みの配布先を同梱の skill と比べ、`outdated`（古い）、`old layout`（旧配置）、`edited since installation`（配布後に編集済み）を表示します。`panecom skill update` は古いものと旧配置のものを選択なしで書き換えます。編集済みのものは警告を出して飛ばし、上書きしません。`panecom update` は新しいバイナリを入れた後、そのバイナリでこの確認を行います。また、記録済みの配布先が古い間は、`register` / `tell` / `send` が stderr に一行で案内します（1 日に 1 回まで）。エージェントが新しい指示を読むには、新しいセッションを開始してください。
+
+Claude Code は skill を `<skills ディレクトリ>/<名前>/SKILL.md` から読み込みます。panecom 3.0.0 以前は `~/.claude/skills/panecom.md` に書き込んでおり、これは Claude Code に読み込まれません。`skill update`（または `skill install`）は、記録済みのこの形式の配布を `panecom/SKILL.md` へ移し、旧パスは panecom が書き込む前の状態（通常は何も無い状態）に戻します。旧ファイルを編集していた場合はそのまま残し、エラーで止まります。編集内容を移してから旧ファイルを削除し、再実行してください。panecom が配布していない旧配置のコピー（古い `deploy-skill.sh` によるもの等）は `skill list` に `untracked` として表示されます。削除は利用者に任せます。
 
 リポジトリの `AGENTS.md` も再生成するときは、従来どおりソースツリーで `scripts/deploy-skill.sh` を実行します。
 
@@ -545,8 +549,8 @@ install は実行中の panecom バイナリに同梱された skill を使い�
 
 | 対象 | パス | 更新方法 |
 |---|---|---|
-| Claude Code (user) | `~/.claude/skills/panecom.md` | `skill install` / スクリプト |
-| Claude Code (project) | `<project>/.claude/skills/panecom.md` | `skill install` |
+| Claude Code (user) | `~/.claude/skills/panecom/SKILL.md` | `skill install` / スクリプト |
+| Claude Code (project) | `<project>/.claude/skills/panecom/SKILL.md` | `skill install` |
 | Codex (project) | `<project>/AGENTS.md` | `skill install` / ソースツリーのスクリプト |
 | Codex (user) | `~/.codex/instructions.md` | `skill install` / スクリプト |
 

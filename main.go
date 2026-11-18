@@ -1563,7 +1563,11 @@ Commands:
   share [--full] [-l N] <role>    Share this pane's screen with <role>
   profile [-f] <name>            Launch profile from .panecom.yaml
   skill install                  Choose agent and user/project scope
-  skill list                     Show tracked skill installations
+  skill list                     Show tracked skill installations and
+                                 whether each is up to date
+  skill update [--check]         Update tracked installs that are outdated
+                                 or in the old layout; edited ones are kept
+                                 --check: report, don't write
   skill uninstall                Remove a tracked skill installation
   skill sync [--check] <file>... Rewrite each file's panecom skill block
                                  Needs an existing block; not for Claude
@@ -1600,10 +1604,12 @@ func main() {
 		if err := update.Run(Version); err != nil {
 			die(err.Error())
 		}
+		checkSkillsWithNewBinary()
 		return
 	case "skill":
-		// sync takes file arguments; the others take none.
-		if len(args) < 2 || (args[1] != "sync" && len(args) != 2) {
+		// sync takes file arguments and update an optional --check; the
+		// others take none.
+		if len(args) < 2 || (args[1] != "sync" && args[1] != "update" && len(args) != 2) {
 			usage()
 		}
 		var err error
@@ -1614,6 +1620,11 @@ func main() {
 			err = cmdSkillList()
 		case "uninstall":
 			err = cmdSkillUninstall()
+		case "update":
+			if len(args) > 3 || len(args) == 3 && args[2] != "--check" {
+				usage()
+			}
+			err = cmdSkillUpdate(len(args) == 3)
 		case "sync":
 			check := false
 			paths := []string{}
@@ -1641,6 +1652,13 @@ func main() {
 	mux, err = DetectMultiplexer(muxFlag, nil)
 	if err != nil {
 		die(err.Error())
+	}
+
+	switch args[0] {
+	case "register", "tell", "send":
+		// The commands agents run to work together: the places a stale skill
+		// does its damage, so the places worth a (rate-limited) reminder.
+		noticeStaleSkills()
 	}
 
 	switch args[0] {
